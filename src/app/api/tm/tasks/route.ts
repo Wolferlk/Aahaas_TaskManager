@@ -276,7 +276,7 @@ export async function POST(req: Request) {
     const created = await queryOne<{ task_number: string }>('SELECT task_number FROM tm_tasks WHERE id = ?', [taskId]);
 
     await logActivity(taskId, user.id, 'CREATED', null, null, body.title);
-    await logStatusChange(taskId, null, body.status, user.id, 'Task created');
+    await logStatusChange(taskId, null, body.status ?? 'TODO', user.id, 'Task created');
 
     if (body.assignee_id && body.assignee_id !== user.id) {
       await notify({
