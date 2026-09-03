@@ -163,6 +163,10 @@ const PARSER_SYSTEM = `You convert an employee's free-form daily work update int
 Rules:
 - Split the text into distinct work items. One sentence may contain several.
 - Never invent work that is not implied by the text.
+- title is REQUIRED and must never be empty. Write a short (3-8 word) title that
+  summarises the work in your own words, e.g. "Fixed invoice PDF export" or
+  "Started B2B booking details page". Do not copy the raw sentence verbatim if it
+  is long — condense it. If genuinely nothing can be titled, use "Untitled work item".
 - status must be one of: TODO, IN_PROGRESS, BLOCKED, WAITING, REVIEW, COMPLETED.
 - priority must be one of: CRITICAL, HIGH, MEDIUM, LOW. Use MEDIUM when unclear.
 - progress is an integer 0-100. Completed work is 100.
@@ -170,6 +174,12 @@ Rules:
 - start_time/end_time are "HH:MM" 24h strings or null.
 - confidence is 0.0-1.0 reflecting how directly the text supports the item.
 - ai_generated_fields lists field names you inferred rather than read.
+
+Example input: "Completed invoice PDF export, fixed report filters."
+Example output: { "items": [
+  { "title": "Completed invoice PDF export", "description": "Completed invoice PDF export.", "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Invoice", "project": null, "work_type": null, "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": null, "tags": [], "confidence": 0.9, "ai_generated_fields": [] },
+  { "title": "Fixed report filters", "description": "Fixed report filters.", "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Reporting", "project": null, "work_type": null, "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": null, "tags": [], "confidence": 0.9, "ai_generated_fields": [] }
+] }
 
 Return JSON: { "items": ParsedItem[] }`;
 
