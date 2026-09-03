@@ -287,3 +287,16 @@ export async function refreshParentProgress(parentId: number) {
   const progress = Math.round((Number(row.done) / Number(row.total)) * 100);
   await execute('UPDATE tm_tasks SET progress = ? WHERE id = ?', [progress, parentId]);
 }
+
+/**
+ * Whether `user` may assign work to `targetUserId`.
+ * Managers may assign to anyone; Leaders only within the teams they lead;
+ * everyone else only to themselves.
+ */
+export async function taskMemberScopeCheck(user: SessionUser, targetUserId: number): Promise<boolean> {
+  if (user.role === 'MANAGER') return true;
+  if (targetUserId === user.id) return true;
+  if (user.role !== 'LEADER') return false;
+  const members = await teamMemberIds(user.id);
+  return members.includes(targetUserId);
+}
