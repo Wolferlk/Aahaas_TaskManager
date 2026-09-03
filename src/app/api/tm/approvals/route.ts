@@ -45,13 +45,13 @@ export async function GET(req: Request) {
       `SELECT a.*, r.full_name AS requester_name, r.avatar_url AS requester_avatar, r.email AS requester_email,
               r.requested_role, r.job_title, r.status AS requester_status,
               d.name AS department_name, t.name AS team_name,
-              dec.full_name AS decided_by_name,
+              decider.full_name AS decided_by_name,
               tk.task_number, tk.title AS task_title, tk.deadline AS task_deadline
          FROM tm_approval_requests a
          LEFT JOIN tm_users r ON r.id = a.requester_id
          LEFT JOIN tm_departments d ON d.id = r.department_id
          LEFT JOIN tm_teams t ON t.id = r.team_id
-         LEFT JOIN tm_users dec ON dec.id = a.decided_by
+         LEFT JOIN tm_users decider ON decider.id = a.decided_by
          LEFT JOIN tm_tasks tk ON tk.id = a.entity_id AND a.entity_type = 'TASK'
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         ORDER BY FIELD(a.status,'PENDING','APPROVED','REJECTED'), a.created_at DESC
