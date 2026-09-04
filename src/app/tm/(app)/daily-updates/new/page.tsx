@@ -78,6 +78,36 @@ export default function NewDailyUpdatePage() {
     }
   };
 
+  const acceptGithubItems = (imported: ImportedItem[], meta: { commits: number; aiUsed: boolean }) => {
+    setGithubMeta(meta);
+    setItems((prev) => [
+      ...prev,
+      ...imported.map<ParsedItem>((i) => ({
+        topic: i.work_type ?? null,
+        title: i.title,
+        project: i.project,
+        project_id: i.project_id ?? null,
+        description: i.description,
+        work_type: i.work_type,
+        status: i.status,
+        priority: i.priority,
+        progress: i.progress,
+        start_time: null,
+        end_time: null,
+        hours: i.hours,
+        blockers: null,
+        outcome: null,
+        tags: i.tags ?? [],
+        confidence: i.confidence,
+        ai_generated_fields: i.ai_generated_fields ?? [],
+        suggested_task: null,
+        linked_action: 'CREATED',
+        keep: true,
+        source: 'GITHUB',
+      })),
+    ]);
+  };
+
   const addBlank = () => {
     setItems((prev) => [
       ...prev,
@@ -107,13 +137,14 @@ export default function NewDailyUpdatePage() {
       const res = await apiPost('/api/tm/daily-updates', {
         update_date: new Date().toISOString().slice(0, 10),
         raw_text: mode === 'paste' ? rawText : null,
-        source: mode === 'paste' ? 'AI_PARSED' : 'MANUAL',
+        source: mode === 'manual' ? 'MANUAL' : 'AI_PARSED',
         status: 'SUBMITTED',
         blockers: blockers || null,
         items: kept.map((i) => ({
           task_id: i.suggested_task && i.linked_action === 'ATTACHED' ? i.suggested_task.id : null,
           topic: i.topic,
           title: i.title,
+          project_id: i.project_id ?? null,
           description: i.description,
           work_type: i.work_type,
           status: i.status,
@@ -130,7 +161,7 @@ export default function NewDailyUpdatePage() {
           linked_action: i.linked_action,
         })),
       });
-      setSaved({ summary: res.summary, ai_used: res.ai_used });
+      setSaved({ summary: res.summary, ai_used: res.ai_used, mail: res.mail });
       toast({ kind: 'success', title: 'Daily update saved' });
     } catch (err) {
       toast({ kind: 'error', title: err instanceof ApiClientError ? err.message : 'Could not save your update.' });
@@ -152,6 +183,18 @@ export default function NewDailyUpdatePage() {
             {!saved.ai_used && (
               <p className="mt-2 text-xs text-amber-600">AI analysis unavailable. Your data has been saved successfully.</p>
             )}
+            {saved.mail?.attempted && (
+              <p
+                className={`mt-3 flex items-center justify-center gap-1.5 text-xs ${
+                  saved.mail.sent ? 'text-emerald-600' : 'text-amber-600'
+                }`}
+              >
+                <Mail className="h-3.5 w-3.5" />
+                {saved.mail.sent
+                  ? `Emailed to ${saved.mail.recipients} recipient${saved.mail.recipients === 1 ? '' : 's'}.`
+                  : `Saved, but the email could not be sent: ${saved.mail.error ?? 'unknown error'}`}
+              </p>
+            )}
             <div className="mt-6 flex justify-center gap-2">
               <Button variant="secondary" onClick={() => router.push('/tm/daily-updates/history')}>View history</Button>
               <Button onClick={() => router.push('/tm/dashboard')}>Back to dashboard</Button>
@@ -166,24 +209,44 @@ export default function NewDailyUpdatePage() {
     <>
       <PageHeader title="Daily Update" subtitle="Log what you worked on today" />
       <PageBody className="mx-auto max-w-3xl space-y-5">
-        <div className="flex gap-2">
-          <button
-            onClick={() => setMode('paste')}
-            className={`flex-1 rounded-xl border px-4 py-3 text-left text-sm transition-colors ${mode === 'paste' ? 'border-brand bg-brand-soft text-brand' : 'border-line text-muted hover:bg-line/20'}`}
-          >
-            <Wand2 className="mb-1 h-4 w-4" />
-            <p className="font-medium">Paste free-form text</p>
-            <p className="text-xs opacity-80">AI extracts individual work items for you to review</p>
-          </button>
-          <button
-            onClick={() => setMode('manual')}
-            className={`flex-1 rounded-xl border px-4 py-3 text-left text-sm transition-colors ${mode === 'manual' ? 'border-brand bg-brand-soft text-brand' : 'border-line text-muted hover:bg-line/20'}`}
-          >
-            <Plus className="mb-1 h-4 w-4" />
-            <p className="font-medium">Fill in manually</p>
-            <p className="text-xs opacity-80">Add structured work items yourself</p>
-          </button>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {(
+            [
+              { id: 'paste', icon: Wand2, title: 'Paste free-form text', hint: 'AI extracts work items for you to review' },
+              { id: 'github', icon: Github, title: 'Import from GitHub', hint: "Draft today's update from your commits" },
+              { id: 'manual', icon: Plus, title: 'Fill in manually', hint: 'Add structured work items yourself' },
+            ] as const
+          ).map((opt) => {
+            const Icon = opt.icon;
+            return (
+              <button
+                key={opt.id}
+                onClick={() => setMode(opt.id)}
+                className={`rounded-xl border px-4 py-3 text-left text-sm transition-colors ${
+                  mode === opt.id
+                    ? 'border-brand bg-brand-soft text-brand'
+                    : 'border-line text-muted hover:bg-line/20'
+                }`}
+              >
+                <Icon className="mb-1 h-4 w-4" />
+                <p className="font-medium">{opt.title}</p>
+                <p className="text-xs opacity-80">{opt.hint}</p>
+              </button>
+            );
+          })}
         </div>
+
+        {mode === 'github' && (
+          <GithubImport date={new Date().toISOString().slice(0, 10)} onImported={acceptGithubItems} />
+        )}
+
+        {githubMeta && (
+          <div className="flex items-center gap-2 rounded-xl bg-brand-soft/50 px-3.5 py-2.5 text-sm text-brand">
+            <Github className="h-4 w-4 shrink-0" />
+            Drafted from {githubMeta.commits} commit{githubMeta.commits === 1 ? '' : 's'}
+            {githubMeta.aiUsed ? ' with AI grouping' : ' (grouped by repository)'} — review and edit before saving.
+          </div>
+        )}
 
         {mode === 'paste' && items.length === 0 && (
           <Card>

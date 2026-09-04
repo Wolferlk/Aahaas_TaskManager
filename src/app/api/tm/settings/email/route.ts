@@ -29,10 +29,15 @@ export async function GET(req: Request) {
     const raw = config?.value;
     const parsed = (typeof raw === 'string' ? JSON.parse(raw) : raw) as Record<string, unknown> | null;
 
+    // Managers see the live permission state so a misconfigured Azure app is
+    // obvious before anyone tries to send.
+    const graph = user.role === 'MANAGER' && graphConfigured() ? await verifyGraph() : null;
+
     return NextResponse.json({
       recipients,
       config: { enabled: true, include_items: true, notify_leader: true, ...(parsed ?? {}) },
       graph_configured: graphConfigured(),
+      graph,
       recent: log,
       can_manage: user.role === 'MANAGER',
     });

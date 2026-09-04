@@ -5,7 +5,7 @@ import Link from 'next/link';
 import useSWR from 'swr';
 import {
   Calendar, Clock, User, Flag, CheckSquare,
-  Plus, Send, Trash2, Pencil, ExternalLink, AlertCircle, GitBranch, ChevronRight,
+  Plus, Send, Trash2, Pencil, ExternalLink, AlertCircle, GitBranch, ChevronRight, SquarePen,
 } from 'lucide-react';
 import { Drawer, OverlayHeader } from '@/components/ui/Overlay';
 import { Button } from '@/components/ui/Button';
@@ -19,6 +19,7 @@ import { fetcher, apiPatch, apiPost, ApiClientError } from '@/lib/client';
 import { useToast } from '@/components/ui/Toast';
 import { useSession } from '@/hooks/useSession';
 import type { TaskStatus } from '@/lib/types';
+import { TaskEditModal, type EditableTask } from './TaskEditModal';
 
 interface TaskDetail {
   task: Record<string, unknown> & {
@@ -50,6 +51,7 @@ const TABS = [
 export function TaskDrawer({ taskId, onClose, onChanged }: { taskId: number; onClose: () => void; onChanged?: () => void }) {
   const { data, isLoading, mutate } = useSWR<TaskDetail>(`/api/tm/tasks/${taskId}`, fetcher);
   const [tab, setTab] = useState('details');
+  const [editing, setEditing] = useState(false);
   const toast = useToast();
   const { user } = useSession();
 
@@ -95,6 +97,13 @@ export function TaskDrawer({ taskId, onClose, onChanged }: { taskId: number; onC
               <Link href={`/tm/tasks/${data.task.id}`} className="flex items-center gap-1 text-xs text-brand hover:underline">
                 Open full page <ExternalLink className="h-3 w-3" />
               </Link>
+            }
+            actions={
+              data.can_edit && (
+                <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>
+                  <SquarePen className="h-3.5 w-3.5" /> Edit
+                </Button>
+              )
             }
             onClose={onClose}
           />
@@ -156,6 +165,13 @@ export function TaskDrawer({ taskId, onClose, onChanged }: { taskId: number; onC
             {tab === 'comments' && <CommentsTab taskId={taskId} comments={data.comments} onRefresh={refresh} />}
             {tab === 'activity' && <ActivityTab activity={data.activity} />}
           </div>
+
+          <TaskEditModal
+            task={data.task as unknown as EditableTask}
+            open={editing}
+            onClose={() => setEditing(false)}
+            onSaved={refresh}
+          />
         </>
       )}
     </Drawer>

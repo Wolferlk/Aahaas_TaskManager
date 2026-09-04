@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import useSWR from 'swr';
-import { Plus, UsersRound, AlertTriangle } from 'lucide-react';
-import { fetcher, apiPost, ApiClientError } from '@/lib/client';
+import { Plus, UsersRound, AlertTriangle, SquarePen } from 'lucide-react';
+import { fetcher, apiPost, apiPatch, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -18,6 +18,10 @@ interface Team {
   id: number;
   name: string;
   code: string;
+  description: string | null;
+  department_id: number;
+  leader_user_id: number | null;
+  status: string;
   department_name: string;
   leader_name: string | null;
   leader_avatar: string | null;
@@ -29,6 +33,7 @@ interface Team {
 export default function TeamsPage() {
   const { data, isLoading, mutate } = useSWR<{ teams: Team[] }>('/api/tm/teams', fetcher);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Team | null>(null);
 
   return (
     <>
@@ -48,8 +53,19 @@ export default function TeamsPage() {
           {data?.teams.map((t) => (
             <Card key={t.id} className="animate-fade-up">
               <CardContent className="p-5">
-                <p className="text-sm font-semibold text-ink">{t.name}</p>
-                <p className="text-xs text-faint">{t.code} · {t.department_name}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-ink">{t.name}</p>
+                    <p className="text-xs text-faint">{t.code} · {t.department_name}</p>
+                  </div>
+                  <button
+                    onClick={() => setEditing(t)}
+                    className="focus-ring shrink-0 rounded-lg p-1.5 text-faint hover:bg-line/30 hover:text-ink"
+                    aria-label={`Edit ${t.name}`}
+                  >
+                    <SquarePen className="h-3.5 w-3.5" />
+                  </button>
+                </div>
 
                 <div className="mt-3 flex items-center gap-2">
                   {t.leader_name ? (
@@ -81,51 +97,84 @@ export default function TeamsPage() {
           ))}
         </div>
       </PageBody>
-      <CreateTeamModal open={createOpen} onClose={() => setCreateOpen(false)} onCreated={() => mutate()} />
+      <TeamFormModal open={createOpen} onClose={() => setCreateOpen(false)} onSaved={() => mutate()} />
+      <TeamFormModal open={!!editing} team={editing} onClose={() => setEditing(null)} onSaved={() => mutate()} />
     </>
   );
 }
 
-function CreateTeamModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+function TeamFormModal({
+  open,
+  team,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  team?: Team | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const { departments, users } = useMeta();
   const toast = useToast();
+  const isEdit = !!team;
+
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [leaderId, setLeaderId] = useState('');
   const [description, setDescription] = useState('');
+  const [status, setStatus] = useState('ACTIVE');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const close = () => {
-    setName(''); setCode(''); setDepartmentId(''); setLeaderId(''); setDescription(''); setError(null);
-    onClose();
-  };
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    setName(team?.name ?? '');
+    setCode(team?.code ?? '');
+    setDepartmentId(team?.department_id ? String(team.department_id) : '');
+    setLeaderId(team?.leader_user_id ? String(team.leader_user_id) : '');
+    setDescription(team?.description ?? '');
+    setStatus(team?.status ?? 'ACTIVE');
+  }, [open, team]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!departmentId) { setError('Choose a department.'); return; }
     setSaving(true);
     setError(null);
+    const payload = {
+      name,
+      code,
+      department_id: Number(departmentId),
+      leader_user_id: leaderId ? Number(leaderId) : null,
+      description: description || null,
+      status,
+    };
     try {
-      await apiPost('/api/tm/teams', {
-        name, code, department_id: Number(departmentId),
-        leader_user_id: leaderId ? Number(leaderId) : null,
-        description: description || null,
-      });
-      toast({ kind: 'success', title: 'Team created' });
-      onCreated();
-      close();
+      if (isEdit) {
+        await apiPatch(`/api/tm/teams/${team!.id}`, payload);
+        toast({ kind: 'success', title: 'Team updated' });
+      } else {
+        await apiPost('/api/tm/teams', payload);
+        toast({ kind: 'success', title: 'Team created' });
+      }
+      onSaved();
+      onClose();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Could not create team.');
+      setError(err instanceof ApiClientError ? err.message : 'Could not save the team.');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal open={open} onClose={close} title="New team">
-      <OverlayHeader title="New Team" onClose={close} />
+    <Modal open={open} onClose={onClose} title={isEdit ? 'Edit team' : 'New team'}>
+      <OverlayHeader
+        title={isEdit ? `Edit ${team!.name}` : 'New Team'}
+        subtitle={isEdit ? 'Changing the Leader preserves all task history.' : undefined}
+        onClose={onClose}
+      />
       <form onSubmit={submit} className="space-y-4 p-6">
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -144,12 +193,21 @@ function CreateTeamModal({ open, onClose, onCreated }: { open: boolean; onClose:
             {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </Select>
         </div>
-        <div>
-          <Label htmlFor="t-leader">Leader</Label>
-          <Select id="t-leader" value={leaderId} onChange={(e) => setLeaderId(e.target.value)}>
-            <option value="">Assign later</option>
-            {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-          </Select>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor="t-leader">Leader</Label>
+            <Select id="t-leader" value={leaderId} onChange={(e) => setLeaderId(e.target.value)}>
+              <option value="">Assign later</option>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="t-status">Status</Label>
+            <Select id="t-status" value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="ACTIVE">Active</option>
+              <option value="DISABLED">Disabled</option>
+            </Select>
+          </div>
         </div>
         <div>
           <Label htmlFor="t-desc">Description</Label>
@@ -157,8 +215,8 @@ function CreateTeamModal({ open, onClose, onCreated }: { open: boolean; onClose:
         </div>
         <FieldError>{error}</FieldError>
         <div className="flex justify-end gap-2 border-t border-line pt-4">
-          <Button type="button" variant="ghost" onClick={close}>Cancel</Button>
-          <Button type="submit" loading={saving}>Create Team</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button type="submit" loading={saving}>{isEdit ? 'Save changes' : 'Create Team'}</Button>
         </div>
       </form>
     </Modal>

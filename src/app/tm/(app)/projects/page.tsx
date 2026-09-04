@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import useSWR from 'swr';
-import { Plus, FolderKanban, Users as UsersIcon } from 'lucide-react';
-import { fetcher, apiPost, ApiClientError } from '@/lib/client';
+import { Plus, FolderKanban, Users as UsersIcon, SquarePen } from 'lucide-react';
+import { fetcher, apiPost, apiPatch, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -13,13 +13,16 @@ import { Modal, OverlayHeader } from '@/components/ui/Overlay';
 import { useSession } from '@/hooks/useSession';
 import { useMeta } from '@/hooks/useMeta';
 import { useToast } from '@/components/ui/Toast';
-import { fmtDate } from '@/lib/format';
+import { fmtDate, toDateInput } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
 interface Project {
   id: number;
   name: string;
   code: string;
+  description: string | null;
+  department_id: number | null;
+  owner_user_id: number | null;
   status: string;
   progress: number;
   health: string;
@@ -49,6 +52,7 @@ export default function ProjectsPage() {
   const { data, isLoading, mutate } = useSWR<{ projects: Project[] }>('/api/tm/projects', fetcher);
   const { can } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Project | null>(null);
 
   return (
     <>
@@ -77,9 +81,20 @@ export default function ProjectsPage() {
                     <p className="truncate text-sm font-semibold text-ink">{p.name}</p>
                     <p className="text-xs text-faint">{p.code} · {p.department_name ?? 'No department'}</p>
                   </div>
-                  <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', HEALTH_STYLE[p.health])}>
-                    {HEALTH_LABEL[p.health]}
-                  </span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-medium', HEALTH_STYLE[p.health])}>
+                      {HEALTH_LABEL[p.health]}
+                    </span>
+                    {can('tm.project.manage') && (
+                      <button
+                        onClick={() => setEditing(p)}
+                        className="focus-ring rounded-lg p-1.5 text-faint hover:bg-line/30 hover:text-ink"
+                        aria-label={`Edit ${p.name}`}
+                      >
+                        <SquarePen className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="mt-4">
@@ -104,53 +119,98 @@ export default function ProjectsPage() {
         </div>
       </PageBody>
 
-      <CreateProjectModal open={createOpen} onClose={() => setCreateOpen(false)} onCreated={() => mutate()} />
+      <ProjectFormModal open={createOpen} onClose={() => setCreateOpen(false)} onSaved={() => mutate()} />
+      <ProjectFormModal
+        open={!!editing}
+        project={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => mutate()}
+      />
     </>
   );
 }
 
-function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+function ProjectFormModal({
+  open,
+  project,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  project?: Project | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const { departments, users } = useMeta();
   const toast = useToast();
+  const isEdit = !!project;
+
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [description, setDescription] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [ownerId, setOwnerId] = useState('');
   const [targetDate, setTargetDate] = useState('');
+  const [status, setStatus] = useState('PLANNING');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const close = () => {
-    setName(''); setCode(''); setDescription(''); setDepartmentId(''); setOwnerId(''); setTargetDate(''); setError(null);
-    onClose();
-  };
+  // Load the record being edited each time the dialog opens.
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    if (project) {
+      setName(project.name);
+      setCode(project.code);
+      setDescription(project.description ?? '');
+      setDepartmentId(project.department_id ? String(project.department_id) : '');
+      setOwnerId(project.owner_user_id ? String(project.owner_user_id) : '');
+      setTargetDate(toDateInput(project.target_date));
+      setStatus(project.status);
+    } else {
+      setName('');
+      setCode('');
+      setDescription('');
+      setDepartmentId('');
+      setOwnerId('');
+      setTargetDate('');
+      setStatus('PLANNING');
+    }
+  }, [open, project]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setError(null);
+    const payload = {
+      name,
+      code,
+      description: description || null,
+      department_id: departmentId ? Number(departmentId) : null,
+      owner_user_id: ownerId ? Number(ownerId) : null,
+      target_date: targetDate || null,
+      status,
+    };
     try {
-      await apiPost('/api/tm/projects', {
-        name, code, description: description || null,
-        department_id: departmentId ? Number(departmentId) : null,
-        owner_user_id: ownerId ? Number(ownerId) : null,
-        target_date: targetDate || null,
-        status: 'PLANNING',
-      });
-      toast({ kind: 'success', title: 'Project created' });
-      onCreated();
-      close();
+      if (isEdit) {
+        await apiPatch(`/api/tm/projects/${project!.id}`, payload);
+        toast({ kind: 'success', title: 'Project updated' });
+      } else {
+        await apiPost('/api/tm/projects', payload);
+        toast({ kind: 'success', title: 'Project created' });
+      }
+      onSaved();
+      onClose();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Could not create project.');
+      setError(err instanceof ApiClientError ? err.message : 'Could not save the project.');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal open={open} onClose={close} title="New project">
-      <OverlayHeader title="New Project" onClose={close} />
+    <Modal open={open} onClose={onClose} title={isEdit ? 'Edit project' : 'New project'}>
+      <OverlayHeader title={isEdit ? `Edit ${project!.name}` : 'New Project'} onClose={onClose} />
       <form onSubmit={submit} className="space-y-4 p-6">
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -182,14 +242,24 @@ function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClo
             </Select>
           </div>
         </div>
-        <div>
-          <Label htmlFor="p-target">Target date</Label>
-          <Input id="p-target" type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor="p-target">Target date</Label>
+            <Input id="p-target" type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="p-status">Status</Label>
+            <Select id="p-status" value={status} onChange={(e) => setStatus(e.target.value)}>
+              {['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED'].map((v) => (
+                <option key={v} value={v}>{v.replace('_', ' ')}</option>
+              ))}
+            </Select>
+          </div>
         </div>
         <FieldError>{error}</FieldError>
         <div className="flex justify-end gap-2 border-t border-line pt-4">
-          <Button type="button" variant="ghost" onClick={close}>Cancel</Button>
-          <Button type="submit" loading={saving}>Create Project</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button type="submit" loading={saving}>{isEdit ? 'Save changes' : 'Create Project'}</Button>
         </div>
       </form>
     </Modal>

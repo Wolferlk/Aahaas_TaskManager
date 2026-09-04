@@ -38,6 +38,7 @@ interface EmailData {
   recipients: Recipient[];
   config: { enabled: boolean; include_items: boolean; notify_leader: boolean };
   graph_configured: boolean;
+  graph: { ok: boolean; can_send?: boolean; roles?: string[]; sender?: string; error?: string } | null;
   recent: EmailLog[];
   can_manage: boolean;
 }
@@ -125,37 +126,52 @@ export function EmailSettings() {
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
-          <div
-            className={cn(
-              'flex items-start gap-2 rounded-xl px-3.5 py-3 text-sm',
-              data.graph_configured
-                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                : 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
-            )}
-          >
-            {data.graph_configured ? (
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-            ) : (
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            )}
-            <div>
-              {data.graph_configured ? (
-                <>
-                  <p className="font-medium">Microsoft Graph is configured</p>
-                  <p className="mt-0.5 opacity-90">
-                    Daily Update emails are sent from the configured Graph mailbox when a user submits.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p className="font-medium">Microsoft Graph is not configured</p>
-                  <p className="mt-0.5 opacity-90">
-                    Set GRAPH_CLIENT_ID, GRAPH_TENANT_ID, GRAPH_CLIENT_SECRET and GRAPH_USER, then restart the app.
-                  </p>
-                </>
-              )}
-            </div>
-          </div>
+          {(() => {
+            const ready = data.graph_configured && data.graph?.can_send !== false;
+            return (
+              <div
+                className={cn(
+                  'flex items-start gap-2 rounded-xl px-3.5 py-3 text-sm',
+                  ready
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                    : 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
+                )}
+              >
+                {ready ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                ) : (
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                )}
+                <div className="min-w-0">
+                  {!data.graph_configured ? (
+                    <>
+                      <p className="font-medium">Microsoft Graph is not configured</p>
+                      <p className="mt-0.5 opacity-90">
+                        Set GRAPH_CLIENT_ID, GRAPH_TENANT_ID, GRAPH_CLIENT_SECRET and GRAPH_USER, then restart the app.
+                      </p>
+                    </>
+                  ) : data.graph?.can_send === false ? (
+                    <>
+                      <p className="font-medium">Graph is connected but cannot send yet</p>
+                      <p className="mt-0.5 opacity-90">{data.graph.error}</p>
+                      {!!data.graph.roles?.length && (
+                        <p className="mt-1 text-xs opacity-75">
+                          Granted permissions: {data.graph.roles.join(', ')}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-medium">Microsoft Graph is ready</p>
+                      <p className="mt-0.5 opacity-90">
+                        Sending as {data.graph?.sender}. Daily Update emails go out when a user submits.
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {data.can_manage && (
             <div className="mt-4 space-y-3">
@@ -169,7 +185,13 @@ export function EmailSettings() {
                 checked={data.config.notify_leader}
                 onChange={(v) => toggleConfig({ notify_leader: v })}
               />
-              <Button size="sm" variant="secondary" onClick={sendTest} loading={testing} disabled={!data.graph_configured}>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={sendTest}
+                loading={testing}
+                disabled={!data.graph_configured || data.graph?.can_send === false}
+              >
                 <Send className="h-3.5 w-3.5" /> Send test email
               </Button>
             </div>

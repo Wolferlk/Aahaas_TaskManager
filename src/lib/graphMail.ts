@@ -13,6 +13,33 @@ const TOKEN_SKEW_MS = 60_000;
 
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
+/** Application permissions (`roles`) carried by the current app-only token. */
+export function tokenRoles(accessToken: string): string[] {
+  try {
+    const payload = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64').toString()) as { roles?: string[] };
+    return payload.roles ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Turns Graph's opaque "Access is denied" into something a Manager can act on.
+ * Sending app-only mail needs the Mail.Send *application* permission with admin
+ * consent; Mail.Read alone is not enough.
+ */
+function explainDenial(roles: string[]): string {
+  if (!roles.includes('Mail.Send')) {
+    return (
+      'The Azure app registration is missing the "Mail.Send" application permission. ' +
+      'An Azure AD admin must add Microsoft Graph → Application permissions → Mail.Send ' +
+      'and click "Grant admin consent"' +
+      (roles.length ? `. Currently granted: ${roles.join(', ')}.` : '.')
+    );
+  }
+  return 'Microsoft Graph denied the send. Confirm the sender mailbox is licensed and reachable by this app.';
+}
+
 export function graphConfigured() {
   return Boolean(
     process.env.GRAPH_CLIENT_ID &&
@@ -146,6 +173,9 @@ export async function sendMail(input: SendMailInput): Promise<{ ok: boolean; err
       } catch {
         if (text) message = text.slice(0, 300);
       }
+      // 403 here is almost always a missing application permission, not a bad secret.
+      if (res.status === 403) message = explainDenial(tokenRoles(token));
+
       await log(false, message);
       return { ok: false, error: message };
     }
@@ -161,11 +191,25 @@ export async function sendMail(input: SendMailInput): Promise<{ ok: boolean; err
 }
 
 /** Verifies credentials without sending anything. */
-export async function verifyGraph(): Promise<{ ok: boolean; error?: string; sender?: string }> {
+export async function verifyGraph(): Promise<{
+  ok: boolean;
+  error?: string;
+  sender?: string;
+  roles?: string[];
+  can_send?: boolean;
+}> {
   if (!graphConfigured()) return { ok: false, error: 'Microsoft Graph environment variables are not set.' };
   try {
-    await getToken();
-    return { ok: true, sender: unquote(process.env.GRAPH_USER) };
+    const token = await getToken();
+    const roles = tokenRoles(token);
+    const canSend = roles.includes('Mail.Send');
+    return {
+      ok: canSend,
+      can_send: canSend,
+      roles,
+      sender: unquote(process.env.GRAPH_USER),
+      error: canSend ? undefined : explainDenial(roles),
+    };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
