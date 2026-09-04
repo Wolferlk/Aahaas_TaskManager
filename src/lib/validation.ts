@@ -222,7 +222,9 @@ export const dailyUpdateSchema = z.object({
   blockers: z.string().max(4000).nullable().optional(),
   mood: z.string().max(30).nullable().optional(),
   detail: dailyUpdateDetailSchema.optional(),
-  items: z.array(dailyUpdateItemSchema).max(60),
+  // A full end-of-day report is pasted as one document; every bullet in it
+  // becomes an item, so the cap sits well above a typical day.
+  items: z.array(dailyUpdateItemSchema).max(200),
 });
 
 export const approvalDecisionSchema = z.object({

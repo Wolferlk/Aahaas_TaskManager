@@ -85,6 +85,8 @@ function shell(title: string, preheader: string, inner: string) {
 
 export interface DailyUpdateMailItem {
   title: string;
+  /** "Module › Section" as recorded on the item; groups the letter body. */
+  topic?: string | null;
   description?: string | null;
   work_detail?: string | null;
   impact?: string | null;
@@ -113,6 +115,9 @@ export interface DailyUpdateMailInput {
   totalHours: number;
   items: DailyUpdateMailItem[];
   githubCommits?: number;
+  /** Salutation and sign-off for the letter body. Defaults are the house style. */
+  greeting?: string | null;
+  signOff?: string | null;
 }
 
 /** Renders newline-separated text (and "- " bullets) as mail-safe HTML. */
@@ -146,10 +151,90 @@ function panel(title: string, body: string, bg: string, border: string, titleCol
   </td></tr>`;
 }
 
+/* ------------------------------------------------------------------ *
+ * The letter body
+ *
+ * The mail opens as the note a manager expects to read: a salutation, the
+ * day's work grouped by module as bullets, the overall line and a sign-off.
+ * The metrics and the per-item breakdown follow as the supporting record.
+ * ------------------------------------------------------------------ */
+
+/** The module an item is filed under — "Accounts System › Invoice Reporting". */
+function groupLabel(item: DailyUpdateMailItem) {
+  const topic = (item.topic ?? '').split('\u203a')[0].trim();
+  return item.project_name?.trim() || topic || 'Other work';
+}
+
+/** Groups items by module, keeping the order they were recorded in. */
+function groupForLetter(items: DailyUpdateMailItem[]): Array<[string, DailyUpdateMailItem[]]> {
+  const groups = new Map<string, DailyUpdateMailItem[]>();
+  for (const item of items) {
+    const label = groupLabel(item);
+    const list = groups.get(label);
+    if (list) list.push(item);
+    else groups.set(label, [item]);
+  }
+  return [...groups.entries()];
+}
+
+/** One bullet: the written description, with its state when it is not done. */
+function letterLine(item: DailyUpdateMailItem) {
+  const text = (item.description ?? '').trim() || item.title;
+  const state =
+    item.status && item.status !== 'COMPLETED'
+      ? ` <span style="color:${MUTED};">(${esc((item.status ?? '').replace('_', ' ').toLowerCase())})</span>`
+      : '';
+  return `<li style="margin:0 0 5px;font-size:13.5px;color:${INK};line-height:1.6;">${esc(text)}${state}</li>`;
+}
+
+/** "the Accounts, OPS and Task Manager work" — reads back what was covered. */
+function joinLabels(labels: string[]) {
+  if (labels.length <= 1) return labels[0] ?? '';
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+function letterBody(input: DailyUpdateMailInput, dateLabel: string) {
+  const groups = groupForLetter(input.items);
+  const greeting = (input.greeting ?? '').trim() || 'Dear Sir,';
+  const signOff = (input.signOff ?? '').trim() || 'Best regards,';
+  const para = `margin:0 0 12px;font-size:13.5px;color:${INK};line-height:1.7;`;
+
+  const sections = groups
+    .map(
+      ([label, list]) => `
+        <p style="margin:16px 0 5px;font-size:13.5px;font-weight:700;color:${INK};line-height:1.5;">${esc(label)}</p>
+        <ul style="margin:0;padding:0 0 0 20px;">${list.map(letterLine).join('')}</ul>`,
+    )
+    .join('');
+
+  const labels = groups.map(([label]) => label).filter((l) => l !== 'Other work');
+
+  return `<tr><td style="padding:20px 28px 4px;">
+    <p style="${para}">${esc(greeting)}</p>
+    <p style="${para}">Please find below my development update for today, ${esc(dateLabel)}.</p>
+    ${sections || `<p style="${para}">No individual work items were recorded for the day.</p>`}
+    ${input.summary ? `<p style="${para}padding-top:14px;">${esc(input.summary)}</p>` : ''}
+    ${input.blockers ? `<p style="${para}"><strong>Blockers:</strong> ${esc(input.blockers)}</p>` : ''}
+    <p style="${para}padding-top:6px;">Thank you.</p>
+    <p style="${para}margin-bottom:4px;">${esc(signOff)}<br />${esc(input.authorName)}</p>
+    ${labels.length
+      ? `<p style="margin:0;font-size:12px;color:${MUTED};line-height:1.6;">
+           The tasks above are based on today&rsquo;s development update, including the ${esc(joinLabels(labels))} work.
+         </p>`
+      : ''}
+  </td></tr>`;
+}
+
 export function dailyUpdateEmail(input: DailyUpdateMailInput): { subject: string; html: string } {
   const dateLabel = new Date(input.date + 'T00:00:00').toLocaleDateString('en-GB', {
     weekday: 'long',
     day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  const letterDate = new Date(input.date + 'T00:00:00').toLocaleDateString('en-GB', {
+    day: '2-digit',
     month: 'long',
     year: 'numeric',
   });
@@ -236,6 +321,8 @@ export function dailyUpdateEmail(input: DailyUpdateMailInput): { subject: string
         <div style="font-size:13px;color:${MUTED};">${who ? who + ' &middot; ' : ''}${esc(dateLabel)}</div>
       </td></tr>
 
+      ${letterBody(input, letterDate)}
+
       <tr><td style="padding:16px 23px 4px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
           ${statCell(completed, 'Completed', '#15803d')}
@@ -245,42 +332,18 @@ export function dailyUpdateEmail(input: DailyUpdateMailInput): { subject: string
         </tr></table>
       </td></tr>
 
-      ${input.summary
-        ? `<tr><td style="padding:18px 28px 0;">
-             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff5f6;border:1px solid #ffd7db;border-radius:10px;">
-               <tr><td style="padding:13px 15px;">
-                 <div style="font-size:11px;font-weight:700;color:${BRAND};text-transform:uppercase;letter-spacing:.5px;">
-                   Summary${input.aiGenerated ? ' &middot; AI generated' : ''}
-                 </div>
-                 <div style="font-size:13.5px;color:${INK};line-height:1.6;padding-top:5px;">${esc(input.summary)}</div>
-               </td></tr>
-             </table>
-           </td></tr>`
-        : ''}
-
       ${input.detailedSummary && input.detailedSummary.trim() !== (input.summary ?? '').trim()
         ? panel('The day in detail', textBlock(input.detailedSummary, INK), '#f8fafc', LINE, INK)
         : ''}
 
       <tr><td style="padding:22px 28px 0;">
         <div style="font-size:12px;font-weight:700;color:${INK};text-transform:uppercase;letter-spacing:.5px;">
-          Work Items (${input.items.length})
+          Detailed breakdown (${input.items.length})
         </div>
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:2px;">
           ${rows || `<tr><td style="padding:14px 0;font-size:13px;color:${MUTED};">No individual work items were recorded.</td></tr>`}
         </table>
       </td></tr>
-
-      ${input.blockers
-        ? `<tr><td style="padding:18px 28px 0;">
-             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;">
-               <tr><td style="padding:13px 15px;">
-                 <div style="font-size:11px;font-weight:700;color:#b91c1c;text-transform:uppercase;letter-spacing:.5px;">Blockers</div>
-                 <div style="font-size:13.5px;color:${INK};line-height:1.6;padding-top:5px;">${esc(input.blockers)}</div>
-               </td></tr>
-             </table>
-           </td></tr>`
-        : ''}
 
       ${input.nextDayPlan
         ? panel('Planned next', textBlock(input.nextDayPlan, INK), '#eff6ff', '#bfdbfe', '#1d4ed8')

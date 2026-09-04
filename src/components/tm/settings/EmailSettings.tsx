@@ -36,7 +36,7 @@ interface EmailLog {
 
 interface EmailData {
   recipients: Recipient[];
-  config: { enabled: boolean; include_items: boolean; notify_leader: boolean };
+  config: { enabled: boolean; include_items: boolean; notify_leader: boolean; greeting: string; sign_off: string };
   graph_configured: boolean;
   graph: { ok: boolean; can_send?: boolean; roles?: string[]; sender?: string; error?: string } | null;
   recent: EmailLog[];
@@ -86,7 +86,7 @@ export function EmailSettings() {
     }
   };
 
-  const toggleConfig = async (patch: Record<string, boolean>) => {
+  const toggleConfig = async (patch: Record<string, boolean | string>) => {
     try {
       await apiPatch('/api/tm/settings/email', patch);
       mutate();
@@ -185,6 +185,32 @@ export function EmailSettings() {
                 checked={data.config.notify_leader}
                 onChange={(v) => toggleConfig({ notify_leader: v })}
               />
+              {/* The daily update mail opens as a letter; these are its first
+                  and last lines. */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs">Salutation</Label>
+                  <Input
+                    defaultValue={data.config.greeting}
+                    placeholder="Dear Sir,"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v && v !== data.config.greeting) toggleConfig({ greeting: v });
+                    }}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Sign-off</Label>
+                  <Input
+                    defaultValue={data.config.sign_off}
+                    placeholder="Best regards,"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v && v !== data.config.sign_off) toggleConfig({ sign_off: v });
+                    }}
+                  />
+                </div>
+              </div>
               <Button
                 size="sm"
                 variant="secondary"

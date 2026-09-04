@@ -35,7 +35,7 @@ export async function POST(req: Request) {
     });
 
     // --- Suggest an existing task for each item (never auto-link) ----------
-    const items = result.data.map((item) => {
+    const items = result.data.items.map((item) => {
       const suggestion = matchExistingTask(item.title, item.description ?? '', openTasks);
       return { ...item, suggested_task: suggestion };
     });
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
         user.id,
         process.env.OPENAI_MODEL || 'gpt-4o-mini',
         text.slice(0, 60000),
-        JSON.stringify({ items }),
+        JSON.stringify({ items, narrative: result.data.narrative }),
         result.ok ? 1 : 0,
         result.ok ? null : 'AI unavailable — deterministic fallback used',
         Date.now() - started,
@@ -56,6 +56,9 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       items,
+      // Wrap-up sections ("Main outcomes", "Overall status") are day narrative,
+      // not work items — the review screen pre-fills the day detail with them.
+      narrative: result.data.narrative,
       ai_used: result.ok,
       fallback: result.fallback,
       message:

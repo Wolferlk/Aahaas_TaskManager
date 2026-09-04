@@ -170,123 +170,484 @@ export interface ParsedItem {
   files_changed?: number;
 }
 
-const PARSER_SYSTEM = `You convert an employee's free-form daily work update into structured work items.
+/** The work types the review screen offers; the parser is held to this list. */
+const WORK_TYPES = [
+  'Development', 'Bug Fix', 'Testing', 'Documentation', 'Deployment',
+  'Refactor', 'Meeting', 'Support', 'Research', 'Design',
+];
+const STATUSES = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED'];
+const PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+
+/** Upper bound on a single paste. A full end-of-day report runs to ~70 lines. */
+const MAX_ITEMS = 150;
+/** Small enough that one response never truncates mid-item. */
+const MAX_LINES_PER_CHUNK = 12;
+const MAX_CHARS_PER_CHUNK = 3200;
+
+const PARSER_SYSTEM = `You convert an employee's daily work update into structured work items.
+
+The text you receive is ONE section of a longer report. Every numbered line in it
+is one work item.
 
 Rules:
-- Split the text into distinct work items. One sentence may contain several.
-- Never invent work that is not implied by the text.
-- title is REQUIRED and must never be empty. Write a short (3-8 word) title that
-  summarises the work in your own words, e.g. "Fixed invoice PDF export" or
-  "Started B2B booking details page". Do not copy the raw sentence verbatim if it
-  is long — condense it. If genuinely nothing can be titled, use "Untitled work item".
-- status must be one of: TODO, IN_PROGRESS, BLOCKED, WAITING, REVIEW, COMPLETED.
-- priority must be one of: CRITICAL, HIGH, MEDIUM, LOW. Use MEDIUM when unclear.
+- Return exactly one item per numbered line, in the same order. Never merge two
+  lines into one item, never drop a line, never add work that is not written.
+- Never invent work, numbers, people, tickets or outcomes.
+- title is REQUIRED and must never be empty. Write a short (3-9 word) title that
+  names the work, e.g. "Fixed invoice PDF export". Condense a long line rather
+  than copying it verbatim.
+- description is REQUIRED and must NEVER be null or empty. Write one or two
+  complete sentences, in plain professional English, restating what was done as
+  the employee would report it to a manager. Turn a fragment into a full
+  sentence. Never return the title again as the description.
+- topic: the section heading supplied with the text, when one is given.
+- project: the system or module heading supplied with the text, matched to a
+  known project name when one clearly corresponds. null otherwise.
+- work_type: exactly one of ${WORK_TYPES.join(', ')} — or null when unclear.
+- status must be one of: ${STATUSES.join(', ')}. A line written in the past tense
+  ("Added", "Implemented", "Improved") is COMPLETED.
+- priority must be one of: ${PRIORITIES.join(', ')}. Use MEDIUM when unclear.
 - progress is an integer 0-100. Completed work is 100.
 - hours is a number or null. Only fill it if the text implies a duration.
 - start_time/end_time are "HH:MM" 24h strings or null.
+- outcome: the result once it landed, when the line states or clearly implies the
+  work was delivered. null otherwise.
+- tags: 1-4 short lowercase keywords taken from the words of the line.
 - confidence is 0.0-1.0 reflecting how directly the text supports the item.
 - work_detail: 2-4 sentences expanding on exactly what was done, in the
-  employee's own terms. Use only what the text supports — if the text is one
+  employee's own terms. Use only what the line supports — if the line is one
   short clause, keep work_detail short rather than padding it.
 - technical_notes: the technical specifics mentioned (components, endpoints,
-  queries, tools). null when the text has none.
-- impact: who or what this helps, only when the text says or clearly implies it.
-- next_steps: what remains, only when the text mentions it. null otherwise.
+  queries, tools). null when the line has none.
+- impact: who or what this helps, only when the line says or clearly implies it.
+- next_steps: what remains, only when the line mentions it. null otherwise.
 - ai_generated_fields lists field names you inferred rather than read.
 
-Example input: "Completed invoice PDF export, fixed report filters."
+Example input:
+System / module heading: Accounts System
+Section heading: Invoice Reporting
+Produce exactly 2 items, one per line below, in the same order:
+1. Added invoice amount history and previous-value comparison.
+2. Improved visibility of amended invoice amounts.
+
 Example output: { "items": [
-  { "title": "Completed invoice PDF export", "description": "Completed invoice PDF export.", "work_detail": "Finished the invoice PDF export so an invoice can be downloaded as a PDF.", "technical_notes": null, "impact": null, "next_steps": null, "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Invoice", "project": null, "work_type": null, "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": null, "tags": [], "confidence": 0.9, "ai_generated_fields": [] },
-  { "title": "Fixed report filters", "description": "Fixed report filters.", "work_detail": "Fixed the filters on the report screen so results narrow correctly.", "technical_notes": null, "impact": null, "next_steps": null, "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Reporting", "project": null, "work_type": null, "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": null, "tags": [], "confidence": 0.9, "ai_generated_fields": [] }
+  { "title": "Added invoice amount history", "description": "Added an amount history to invoices so the previous value can be compared against the current one.", "work_detail": "Extended invoice reporting with a history of the invoice amount and a comparison against the previously recorded value.", "technical_notes": null, "impact": null, "next_steps": null, "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Invoice Reporting", "project": "Accounts System", "work_type": "Development", "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": "Invoice amount history is available with previous-value comparison.", "tags": ["invoice","reporting"], "confidence": 0.9, "ai_generated_fields": ["work_type"] },
+  { "title": "Improved amended invoice visibility", "description": "Improved how amended invoice amounts are surfaced so changes are visible on the invoice reports.", "work_detail": "Made amended invoice amounts easier to see in the invoice reports.", "technical_notes": null, "impact": null, "next_steps": null, "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Invoice Reporting", "project": "Accounts System", "work_type": "Development", "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": null, "tags": ["invoice","amendment"], "confidence": 0.9, "ai_generated_fields": ["work_type"] }
 ] }
 
 Return JSON: { "items": ParsedItem[] }`;
 
-/** Deterministic fallback: split on sentence/bullet boundaries. */
-export function fallbackParse(text: string): ParsedItem[] {
-  const chunks = text
+/* ------------------------------------------------------------------ *
+ * Section-aware splitting
+ *
+ * A daily report is pasted as headings with bullets underneath. Parsing it as
+ * one blob loses the tail of a long document, so it is split on its headings,
+ * parsed in chunks, and reassembled — every bullet comes back as its own item,
+ * carrying the heading it sat under.
+ * ------------------------------------------------------------------ */
+
+export interface UpdateSection {
+  /** Top-level heading — the system or module, e.g. "Accounts System". */
+  group: string | null;
+  /** Nearest sub-heading, e.g. "Reporting & Currency Improvements". */
+  topic: string | null;
+  /** True when the heading names a wrap-up rather than work items. */
+  summaryOnly: boolean;
+  lines: string[];
+}
+
+interface ParseChunk {
+  group: string | null;
+  topic: string | null;
+  lines: string[];
+}
+
+/** Wrap-up sections are kept out of the work items and offered as day narrative. */
+export interface UpdateNarrative {
+  highlights: string[];
+  overall: string | null;
+}
+
+export interface ParsedUpdate {
+  items: ParsedItem[];
+  narrative: UpdateNarrative;
+}
+
+const SUMMARY_HEADING =
+  /^(main\s+outcome|outcome|overall|summary|key\s+(?:outcome|highlight|point)|highlight|conclusion|wrap[\s-]?up)/i;
+
+function headingText(raw: string) {
+  return raw.replace(/^[\s#*_\-–—.\d)]+/, '').replace(/[\s*_:]+$/, '').trim();
+}
+
+/** An ATX heading, a line that is only bold text, or a bare "Title:" line. */
+function headingLevel(line: string): number | null {
+  const atx = line.match(/^(#{1,6})\s+\S/);
+  if (atx) return atx[1].length;
+  if (/^\*\*[^*]+\*\*:?$/.test(line)) return 3;
+  if (/^[A-Z][A-Za-z0-9 &/'()-]{2,60}:$/.test(line)) return 3;
+  return null;
+}
+
+/** Splits a pasted report into its headings and the lines beneath each one. */
+export function splitUpdateSections(text: string): UpdateSection[] {
+  const sections: UpdateSection[] = [];
+  let group: string | null = null;
+  let topic: string | null = null;
+  let current: UpdateSection | null = null;
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const level = headingLevel(line);
+    if (level !== null) {
+      const label = headingText(line);
+      if (!label) continue;
+      if (level <= 2) {
+        group = label;
+        topic = null;
+      } else {
+        topic = label;
+      }
+      current = null;
+      continue;
+    }
+
+    const body = line
+      .replace(/^[-*•]\s+/, '')
+      .replace(/^\d+[.)]\s+/, '')
+      .trim();
+    if (body.length < 3) continue;
+
+    if (!current) {
+      current = {
+        group,
+        topic,
+        summaryOnly: SUMMARY_HEADING.test(topic ?? group ?? ''),
+        lines: [],
+      };
+      sections.push(current);
+    }
+    current.lines.push(body);
+  }
+
+  return sections;
+}
+
+/** Sentence/bullet split, used when the paste carries no headings at all. */
+function looseLines(text: string): string[] {
+  return text
     .split(/\n+|(?<=[.;])\s+(?=[A-Z])/)
     .map((s) => s.replace(/^[\s\-*•\d.)]+/, '').trim())
     .filter((s) => s.length > 3);
+}
 
-  const donePattern = /\b(completed|finished|done|deployed|delivered|fixed|resolved|closed)\b/i;
-  const blockedPattern = /\b(blocked|waiting|stuck|pending|on hold)\b/i;
-  const startedPattern = /\b(started|began|working on|in progress|continued)\b/i;
-
-  return chunks.slice(0, 25).map((line) => {
-    const status = blockedPattern.test(line)
-      ? 'BLOCKED'
-      : donePattern.test(line)
-        ? 'COMPLETED'
-        : startedPattern.test(line)
-          ? 'IN_PROGRESS'
-          : 'IN_PROGRESS';
-    const hoursMatch = line.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hours)\b/i);
-    return {
-      topic: null,
-      title: line.length > 120 ? line.slice(0, 117) + '...' : line,
-      project: null,
-      description: line,
-      work_type: null,
-      status,
-      priority: /\b(urgent|critical|asap)\b/i.test(line) ? 'HIGH' : 'MEDIUM',
-      progress: status === 'COMPLETED' ? 100 : status === 'BLOCKED' ? 40 : 50,
-      start_time: null,
-      end_time: null,
-      hours: hoursMatch ? Number(hoursMatch[1]) : null,
-      blockers: blockedPattern.test(line) ? line : null,
-      outcome: null,
-      tags: [],
-      confidence: 0.4,
-      ai_generated_fields: ['status', 'priority', 'progress'],
-      work_detail: line,
-      technical_notes: null,
-      impact: null,
-      next_steps: null,
+function chunkSections(sections: UpdateSection[]): ParseChunk[] {
+  const chunks: ParseChunk[] = [];
+  for (const section of sections) {
+    let lines: string[] = [];
+    let chars = 0;
+    const flush = () => {
+      if (lines.length) chunks.push({ group: section.group, topic: section.topic, lines });
+      lines = [];
+      chars = 0;
     };
+    for (const line of section.lines) {
+      if (lines.length >= MAX_LINES_PER_CHUNK || (lines.length && chars + line.length > MAX_CHARS_PER_CHUNK)) flush();
+      lines.push(line);
+      chars += line.length;
+    }
+    flush();
+  }
+  return chunks;
+}
+
+/** Chunks are independent, so they run together rather than one after another. */
+async function mapWithConcurrency<T, R>(
+  input: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(input.length);
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, input.length) }, async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= input.length) return;
+        out[i] = await fn(input[i]);
+      }
+    }),
+  );
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Normalisation
+ * ------------------------------------------------------------------ */
+
+const oneLine = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
+
+function sentence(value: string) {
+  const s = oneLine(value);
+  if (!s) return '';
+  const capped = s[0].toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(capped) ? capped : `${capped}.`;
+}
+
+/**
+ * The review screen shows a description on every item, so one is always
+ * written: the model's, else the source line, else the long-form detail, else
+ * the title. It is never left blank for the submitter to fill in.
+ */
+function describe(item: Partial<ParsedItem>, title: string, sourceLine?: string): string {
+  for (const candidate of [item.description, sourceLine, item.work_detail]) {
+    const text = oneLine(candidate);
+    if (text && text.toLowerCase() !== title.toLowerCase()) return sentence(text).slice(0, 2000);
+  }
+  return sentence(title);
+}
+
+const pick = (value: unknown, allowed: string[], fallback: string) => {
+  const v = oneLine(value).toUpperCase().replace(/[\s-]+/g, '_');
+  return allowed.includes(v) ? v : fallback;
+};
+
+function pickWorkType(value: unknown): string | null {
+  const v = oneLine(value).toLowerCase();
+  if (!v) return null;
+  return WORK_TYPES.find((w) => w.toLowerCase() === v) ?? null;
+}
+
+const DONE = /\b(completed|finished|done|deployed|delivered|fixed|resolved|closed|added|implemented|improved|updated|refactored|developed|extended|enhanced|integrated|built)\b/i;
+const BLOCKED = /\b(blocked|waiting|stuck|pending|on hold)\b/i;
+const STARTED = /\b(started|began|working on|in progress|continued|ongoing)\b/i;
+
+/** Everything a line yields without a model — also the per-line safety net. */
+function deterministicItem(line: string): Partial<ParsedItem> {
+  const status = BLOCKED.test(line) ? 'BLOCKED' : DONE.test(line) ? 'COMPLETED' : STARTED.test(line) ? 'IN_PROGRESS' : 'IN_PROGRESS';
+  const hours = line.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hours)\b/i);
+  const words = oneLine(line).split(' ');
+
+  return {
+    title: words.length > 9 ? words.slice(0, 9).join(' ') : oneLine(line),
+    description: sentence(line),
+    work_detail: sentence(line),
+    status,
+    priority: /\b(urgent|critical|asap)\b/i.test(line) ? 'HIGH' : 'MEDIUM',
+    progress: status === 'COMPLETED' ? 100 : status === 'BLOCKED' ? 40 : 50,
+    hours: hours ? Number(hours[1]) : null,
+    blockers: BLOCKED.test(line) ? oneLine(line) : null,
+    confidence: 0.4,
+    ai_generated_fields: ['status', 'priority', 'progress'],
+  };
+}
+
+/**
+ * "Accounts System › Invoice Reporting" — the module and the section it sat
+ * under, kept together in the one column the item row has for it. The daily
+ * update mail groups on the part before the separator.
+ */
+function composeTopic(group: string | null, topic: string | null): string | null {
+  const parts = [group, topic].map(oneLine).filter(Boolean);
+  const unique = parts.filter((p, i) => parts.findIndex((q) => q.toLowerCase() === p.toLowerCase()) === i);
+  return unique.join(' › ').slice(0, 160) || null;
+}
+
+function normaliseParsedItem(
+  raw: Partial<ParsedItem>,
+  ctx: { group: string | null; topic: string | null; line?: string },
+): ParsedItem {
+  const title =
+    oneLine(raw.title).slice(0, 240) ||
+    (ctx.line ? oneLine(ctx.line).slice(0, 120) : '') ||
+    'Untitled work item';
+
+  return {
+    topic: composeTopic(ctx.group, oneLine(raw.topic) || ctx.topic),
+    title,
+    project: oneLine(raw.project).slice(0, 160) || ctx.group || null,
+    description: describe(raw, title, ctx.line),
+    work_type: pickWorkType(raw.work_type),
+    status: pick(raw.status, STATUSES, 'IN_PROGRESS'),
+    priority: pick(raw.priority, PRIORITIES, 'MEDIUM'),
+    progress: Math.max(0, Math.min(100, Math.round(Number(raw.progress ?? 0)) || 0)),
+    start_time: oneLine(raw.start_time).slice(0, 5) || null,
+    end_time: oneLine(raw.end_time).slice(0, 5) || null,
+    hours: Number.isFinite(Number(raw.hours)) && raw.hours !== null ? Number(raw.hours) : null,
+    blockers: oneLine(raw.blockers).slice(0, 2000) || null,
+    outcome: oneLine(raw.outcome).slice(0, 2000) || null,
+    tags: Array.isArray(raw.tags) ? raw.tags.slice(0, 8).map((t) => oneLine(t).slice(0, 40)).filter(Boolean) : [],
+    confidence: Math.max(0, Math.min(1, Number(raw.confidence ?? 0.5))),
+    ai_generated_fields: Array.isArray(raw.ai_generated_fields) ? raw.ai_generated_fields.map(String) : [],
+    work_detail: oneLine(raw.work_detail).slice(0, 8000) || describe(raw, title, ctx.line),
+    technical_notes: oneLine(raw.technical_notes).slice(0, 4000) || null,
+    impact: oneLine(raw.impact).slice(0, 2000) || null,
+    next_steps: oneLine(raw.next_steps).slice(0, 2000) || null,
+  };
+}
+
+/** Deterministic fallback: every line of the paste, with its heading kept. */
+export function fallbackParse(text: string): ParsedItem[] {
+  const sections = splitUpdateSections(text).filter((s) => !s.summaryOnly);
+  const source: UpdateSection[] = sections.length
+    ? sections
+    : [{ group: null, topic: null, summaryOnly: false, lines: looseLines(text) }];
+
+  return source
+    .flatMap((section) =>
+      section.lines.map((line) =>
+        normaliseParsedItem(deterministicItem(line), { group: section.group, topic: section.topic, line }),
+      ),
+    )
+    .slice(0, MAX_ITEMS);
+}
+
+const keywords = (s: string) =>
+  new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 3),
+  );
+
+/**
+ * Source lines the model did not represent.
+ *
+ * A dropped bullet is a lost record, so anything with no matching item is
+ * recovered deterministically rather than silently disappearing.
+ */
+function uncoveredLines(lines: string[], produced: ParsedItem[]): string[] {
+  if (!produced.length) return lines;
+  const blobs = produced.map((p) => keywords(`${p.title} ${p.description ?? ''} ${p.work_detail ?? ''}`));
+  return lines.filter((line) => {
+    const words = [...keywords(line)];
+    if (!words.length) return false;
+    return !blobs.some((b) => words.filter((w) => b.has(w)).length / words.length >= 0.5);
   });
 }
 
-export async function parseDailyUpdate(
-  text: string,
-  userId: number,
+/** "Main outcomes"/"Overall status" sections become day narrative, not items. */
+function buildNarrative(sections: UpdateSection[]): UpdateNarrative {
+  const highlights: string[] = [];
+  const overall: string[] = [];
+
+  for (const section of sections) {
+    for (const raw of section.lines) {
+      const line = raw.replace(/\*\*/g, '').trim();
+      if (/^overall\b/i.test(line)) {
+        overall.push(line.replace(/^overall(\s+status)?\s*:?\s*/i, ''));
+      } else if (line) {
+        highlights.push(line.slice(0, 400));
+      }
+    }
+  }
+
+  return { highlights: highlights.slice(0, 15), overall: overall.join(' ').trim() || null };
+}
+
+function buildChunkPrompt(
+  chunk: ParseChunk,
   context: { projects: string[]; openTasks: Array<{ task_number: string; title: string }> },
-): Promise<AiResult<ParsedItem[]>> {
-  const prompt = [
+) {
+  return [
     `Known projects: ${context.projects.join(', ') || 'none recorded'}`,
     `The user's open tasks:\n${
       context.openTasks.map((t) => `- ${t.task_number}: ${t.title}`).join('\n') || 'none'
     }`,
     '',
-    'Daily update text:',
-    text,
-  ].join('\n');
+    chunk.group ? `System / module heading: ${chunk.group}` : '',
+    chunk.topic ? `Section heading: ${chunk.topic}` : '',
+    `Produce exactly ${chunk.lines.length} item${chunk.lines.length === 1 ? '' : 's'}, one per line below, in the same order:`,
+    ...chunk.lines.map((line, i) => `${i + 1}. ${line}`),
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
 
-  const parsed = await jsonCompletion<{ items: ParsedItem[] }>('daily_update_parse', userId, PARSER_SYSTEM, prompt);
+/**
+ * Turns a pasted update into work items.
+ *
+ * The paste is split on its headings and parsed a chunk at a time so a long
+ * end-of-day report comes back whole — one item per bullet, each carrying its
+ * heading, a written description and its long-form detail. Any line the model
+ * skips is recovered from the text itself, and if the model is unavailable the
+ * deterministic split covers the entire paste.
+ */
+export async function parseDailyUpdate(
+  text: string,
+  userId: number,
+  context: { projects: string[]; openTasks: Array<{ task_number: string; title: string }> },
+): Promise<AiResult<ParsedUpdate>> {
+  const sections = splitUpdateSections(text);
+  const narrative = buildNarrative(sections.filter((s) => s.summaryOnly));
+  const workSections = sections.filter((s) => !s.summaryOnly);
 
-  if (!parsed?.items?.length) {
+  const source: UpdateSection[] = workSections.length
+    ? workSections
+    : [{ group: null, topic: null, summaryOnly: false, lines: looseLines(text) }];
+
+  const chunks = chunkSections(source);
+  if (!chunks.length) {
+    return { ok: false, fallback: true, data: { items: [], narrative }, message: 'Nothing to extract from that text.' };
+  }
+
+  const responses = await mapWithConcurrency(chunks, 4, (chunk) =>
+    jsonCompletion<{ items: Array<Partial<ParsedItem>> }>(
+      'daily_update_parse',
+      userId,
+      PARSER_SYSTEM,
+      buildChunkPrompt(chunk, context),
+    ),
+  );
+
+  const items: ParsedItem[] = [];
+  let aiChunks = 0;
+
+  chunks.forEach((chunk, i) => {
+    const returned = responses[i]?.items;
+    const ctx = { group: chunk.group, topic: chunk.topic };
+
+    if (!returned?.length) {
+      for (const line of chunk.lines) items.push(normaliseParsedItem(deterministicItem(line), { ...ctx, line }));
+      return;
+    }
+
+    aiChunks++;
+    // Only trust positional pairing when the model returned one item per line.
+    const aligned = returned.length === chunk.lines.length;
+    const produced = returned.map((raw, n) =>
+      normaliseParsedItem(raw, { ...ctx, line: aligned ? chunk.lines[n] : undefined }),
+    );
+    items.push(...produced);
+
+    for (const missed of uncoveredLines(chunk.lines, produced)) {
+      items.push(normaliseParsedItem(deterministicItem(missed), { ...ctx, line: missed }));
+    }
+  });
+
+  const data = { items: items.slice(0, MAX_ITEMS), narrative };
+
+  if (!aiChunks) {
     return {
       ok: false,
       fallback: true,
-      data: fallbackParse(text),
+      data,
       message: 'AI analysis unavailable. Your text was split automatically — please review each item before saving.',
     };
   }
 
-  const clean = parsed.items.slice(0, 40).map((i) => ({
-    ...i,
-    title: String(i.title ?? '').slice(0, 240) || 'Untitled work item',
-    progress: Math.max(0, Math.min(100, Math.round(Number(i.progress ?? 0)))),
-    confidence: Math.max(0, Math.min(1, Number(i.confidence ?? 0.5))),
-    tags: Array.isArray(i.tags) ? i.tags.slice(0, 8).map(String) : [],
-    ai_generated_fields: Array.isArray(i.ai_generated_fields) ? i.ai_generated_fields.map(String) : [],
-    work_detail: i.work_detail ?? i.description ?? null,
-    technical_notes: i.technical_notes ?? null,
-    impact: i.impact ?? null,
-    next_steps: i.next_steps ?? null,
-  }));
-
-  return { ok: true, fallback: false, data: clean };
+  return {
+    ok: true,
+    fallback: aiChunks < chunks.length,
+    data,
+    message:
+      aiChunks < chunks.length
+        ? `${data.items.length} work items extracted. Part of the text was split automatically — please review each item.`
+        : `${data.items.length} work items extracted from ${chunks.length} section${chunks.length === 1 ? '' : 's'}. Review each item below — nothing is saved until you confirm.`,
+  };
 }
 
 /* ------------------------------------------------------------------ *

@@ -85,6 +85,7 @@ async function deliverDailyUpdateMail(ctx: {
   githubCommits?: number;
   items: Array<{
     title: string;
+    topic?: string | null;
     description?: string | null;
     status?: string | null;
     priority?: string | null;
@@ -104,6 +105,8 @@ async function deliverDailyUpdateMail(ctx: {
     const config = ((typeof raw === 'string' ? JSON.parse(raw) : raw) ?? {}) as {
       enabled?: boolean;
       notify_leader?: boolean;
+      greeting?: string | null;
+      sign_off?: string | null;
     };
     if (config.enabled === false) return { attempted: false };
 
@@ -151,8 +154,11 @@ async function deliverDailyUpdateMail(ctx: {
       nextDayPlan: ctx.nextDayPlan,
       totalHours: ctx.totalHours,
       githubCommits: ctx.githubCommits,
+      greeting: config.greeting ?? null,
+      signOff: config.sign_off ?? null,
       items: ctx.items.map((i) => ({
         title: i.title,
+        topic: i.topic ?? null,
         description: i.description ?? null,
         work_detail: i.detail?.work_detail ?? null,
         impact: i.detail?.impact ?? null,

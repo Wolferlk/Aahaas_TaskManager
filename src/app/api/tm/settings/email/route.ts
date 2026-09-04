@@ -35,7 +35,14 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       recipients,
-      config: { enabled: true, include_items: true, notify_leader: true, ...(parsed ?? {}) },
+      config: {
+        enabled: true,
+        include_items: true,
+        notify_leader: true,
+        greeting: 'Dear Sir,',
+        sign_off: 'Best regards,',
+        ...(parsed ?? {}),
+      },
       graph_configured: graphConfigured(),
       graph,
       recent: log,
@@ -93,6 +100,9 @@ const configSchema = z.object({
   enabled: z.boolean().optional(),
   include_items: z.boolean().optional(),
   notify_leader: z.boolean().optional(),
+  // Salutation and sign-off of the letter the daily update mail opens with.
+  greeting: z.string().trim().max(120).optional(),
+  sign_off: z.string().trim().max(120).optional(),
 });
 
 export async function PATCH(req: Request) {
@@ -105,7 +115,15 @@ export async function PATCH(req: Request) {
     ]);
     const raw = existing?.value;
     const current = (typeof raw === 'string' ? JSON.parse(raw) : raw) ?? {};
-    const merged = { enabled: true, include_items: true, notify_leader: true, ...current, ...body };
+    const merged = {
+      enabled: true,
+      include_items: true,
+      notify_leader: true,
+      greeting: 'Dear Sir,',
+      sign_off: 'Best regards,',
+      ...current,
+      ...body,
+    };
 
     await execute(
       `INSERT INTO tm_settings (setting_key, value, description, updated_by)

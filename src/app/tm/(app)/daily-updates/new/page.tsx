@@ -146,6 +146,20 @@ export default function NewDailyUpdatePage() {
           },
         })),
       );
+
+      // "Main outcomes" / "Overall status" sections of the paste are the day's
+      // own narrative rather than work items — they pre-fill the day detail,
+      // and anything already typed there is left alone.
+      const narrative = res.narrative as { highlights?: string[]; overall?: string | null } | undefined;
+      if (narrative?.highlights?.length || narrative?.overall) {
+        setDay((prev) => ({
+          ...prev,
+          highlights: prev.highlights || (narrative.highlights ?? []).join('\n'),
+          detailed_summary: prev.detailed_summary || (narrative.overall ?? ''),
+        }));
+        if (narrative.highlights?.length || narrative.overall) setShowDayDetail(true);
+      }
+
       setParseMessage({ tone: res.ai_used ? 'ai' : 'fallback', text: res.message });
     } catch (err) {
       toast({ kind: 'error', title: err instanceof ApiClientError ? err.message : 'Could not parse your update.' });
