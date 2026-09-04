@@ -4,6 +4,123 @@ import { audit, forbidden, intParam, parseBody, requireUser, searchParams, toErr
 import { dailyUpdateSchema } from '@/lib/validation';
 import { ledTeamIds, logActivity, nextTaskNumber } from '@/lib/tasks';
 import { summariseDay } from '@/lib/ai';
+import { graphConfigured, sendMail } from '@/lib/graphMail';
+import { dailyUpdateEmail } from '@/lib/emailTemplates';
+import type { SessionUser } from '@/lib/types';
+
+/**
+ * Sends the Daily Update mail through Microsoft Graph.
+ *
+ * Resolves recipients from tm_email_recipients, optionally adding the author's
+ * team Leader. Any failure is swallowed into the return value so the caller's
+ * save is never affected.
+ */
+async function deliverDailyUpdateMail(ctx: {
+  user: SessionUser;
+  updateId: number;
+  date: string;
+  summary: string;
+  aiGenerated: boolean;
+  blockers: string | null;
+  totalHours: number;
+  items: Array<{
+    title: string;
+    description?: string | null;
+    status?: string | null;
+    priority?: string | null;
+    progress?: number | null;
+    hours?: number | null;
+    project_id?: number | null;
+  }>;
+}): Promise<{ attempted: boolean; sent?: boolean; recipients?: number; error?: string }> {
+  try {
+    if (!graphConfigured()) return { attempted: false };
+
+    const configRow = await queryOne<{ value: unknown }>('SELECT value FROM tm_settings WHERE setting_key = ?', [
+      'daily_update_email',
+    ]);
+    const raw = configRow?.value;
+    const config = ((typeof raw === 'string' ? JSON.parse(raw) : raw) ?? {}) as {
+      enabled?: boolean;
+      notify_leader?: boolean;
+    };
+    if (config.enabled === false) return { attempted: false };
+
+    const rows = await query<{ email: string; display_name: string | null; mode: string }>(
+      `SELECT email, display_name, mode FROM tm_email_recipients
+        WHERE scope = 'DAILY_UPDATE' AND is_active = 1`,
+    );
+
+    const to = rows.filter((r) => r.mode === 'TO').map((r) => ({ email: r.email, name: r.display_name }));
+    const cc = rows.filter((r) => r.mode === 'CC').map((r) => ({ email: r.email, name: r.display_name }));
+    const bcc = rows.filter((r) => r.mode === 'BCC').map((r) => ({ email: r.email, name: r.display_name }));
+
+    if (config.notify_leader !== false && ctx.user.team_id) {
+      const leader = await queryOne<{ email: string; full_name: string }>(
+        `SELECT u.email, u.full_name FROM tm_teams t
+           JOIN tm_users u ON u.id = t.leader_user_id
+          WHERE t.id = ? AND u.status = 'ACTIVE' AND u.deleted_at IS NULL`,
+        [ctx.user.team_id],
+      );
+      if (leader && !to.some((r) => r.email === leader.email) && leader.email !== ctx.user.email) {
+        cc.push({ email: leader.email, name: leader.full_name });
+      }
+    }
+
+    if (!to.length && !cc.length) return { attempted: false };
+
+    // Project names for the mail body, resolved in one lookup.
+    const projectIds = [...new Set(ctx.items.map((i) => i.project_id).filter((v): v is number => !!v))];
+    const projects = projectIds.length
+      ? await query<{ id: number; name: string }>('SELECT id, name FROM tm_projects WHERE id IN (?)', [projectIds])
+      : [];
+    const projectName = new Map(projects.map((p) => [p.id, p.name]));
+
+    const { subject, html } = dailyUpdateEmail({
+      authorName: ctx.user.full_name,
+      authorTitle: ctx.user.job_title,
+      teamName: ctx.user.team_name ?? null,
+      departmentName: ctx.user.department_name ?? null,
+      date: ctx.date,
+      summary: ctx.summary,
+      aiGenerated: ctx.aiGenerated,
+      blockers: ctx.blockers,
+      totalHours: ctx.totalHours,
+      items: ctx.items.map((i) => ({
+        title: i.title,
+        description: i.description ?? null,
+        status: i.status ?? null,
+        priority: i.priority ?? null,
+        progress: i.progress ?? null,
+        hours: i.hours ?? null,
+        project_name: i.project_id ? (projectName.get(i.project_id) ?? null) : null,
+      })),
+    });
+
+    const result = await sendMail({
+      subject,
+      html,
+      to: to.length ? to : cc,
+      cc: to.length ? cc : [],
+      bcc,
+      replyTo: [{ email: ctx.user.email, name: ctx.user.full_name }],
+      scope: 'DAILY_UPDATE',
+      entityType: 'DAILY_UPDATE',
+      entityId: ctx.updateId,
+      triggeredBy: ctx.user.id,
+    });
+
+    return {
+      attempted: true,
+      sent: result.ok,
+      recipients: to.length + cc.length + bcc.length,
+      error: result.error,
+    };
+  } catch (err) {
+    console.error('[tm] daily update mail failed:', err);
+    return { attempted: true, sent: false, error: err instanceof Error ? err.message : 'Mail delivery failed.' };
+  }
+}
 
 export async function GET(req: Request) {
   try {
@@ -238,12 +355,29 @@ export async function POST(req: Request) {
       items: body.items.length,
     });
 
+    // Mail is best-effort: a delivery failure is reported alongside a
+    // successful save, never in place of it.
+    const mail =
+      body.status === 'SUBMITTED'
+        ? await deliverDailyUpdateMail({
+            user,
+            updateId,
+            date: body.update_date,
+            summary: summary.data,
+            aiGenerated: summary.ok,
+            blockers: body.blockers ?? null,
+            totalHours,
+            items: body.items,
+          })
+        : { attempted: false as const };
+
     return NextResponse.json({
       ok: true,
       id: updateId,
       summary: summary.data,
       ai_used: summary.ok,
       stats,
+      mail,
       message: summary.ok
         ? 'Daily update saved.'
         : 'AI analysis unavailable. Your data has been saved successfully.',

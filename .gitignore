@@ -1,9 +1,11 @@
 node_modules
 .next
 out
+.env
 .env.local
 .env*.local
 *.log
 .DS_Store
 uploads
-.env
+public/uploads
+tsconfig.tsbuildinfo

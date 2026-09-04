@@ -384,3 +384,147 @@ export async function improveTaskDescription(userId: number, title: string, desc
     ? { ok: true, fallback: false, data: text }
     : { ok: false, fallback: true, data: description, message: 'AI is unavailable right now.' };
 }
+
+/* ------------------------------------------------------------------ *
+ * GitHub activity → daily work items
+ * ------------------------------------------------------------------ */
+
+export interface CommitInput {
+  sha: string;
+  message: string;
+  repo: string;
+  owner: string;
+  committed_at: string;
+  additions?: number;
+  deletions?: number;
+  files_changed?: number;
+  project_name?: string | null;
+}
+
+const COMMIT_SYSTEM = `You turn a developer's git commits from one day into the work items they would write in a daily update.
+
+Rules:
+- Group related commits into ONE work item. Several small commits on the same
+  feature are one item, not several. Aim for 1-6 items total.
+- title is REQUIRED, 3-9 words, written as human work, not as a commit message.
+  Good: "Fixed invoice PDF export". Bad: "fix(pdf): export bug #123".
+- description: one or two plain sentences describing what changed and why,
+  derived ONLY from the commit messages. Never invent scope, tickets or outcomes.
+- status: COMPLETED when the commits read as finished work (fix/add/implement/
+  release), otherwise IN_PROGRESS.
+- priority: CRITICAL/HIGH only when commits clearly say hotfix, urgent, critical
+  or security. Otherwise MEDIUM.
+- progress: 100 for COMPLETED, else 50.
+- hours: null unless commit messages state a duration. Do not estimate.
+- work_type: one of Development, Bug Fix, Testing, Documentation, Deployment,
+  Refactor — whichever best fits.
+- repos: the repository names the item draws from.
+- commit_shas: the short shas (first 7 chars) you grouped into this item.
+- tags: up to 4 short lowercase keywords.
+- confidence: 0.0-1.0, how clearly the commits support the item.
+
+Return JSON: { "items": [ { "title", "description", "status", "priority",
+"progress", "hours", "work_type", "project", "repos": [], "commit_shas": [],
+"tags": [], "confidence" } ] }`;
+
+/** Deterministic grouping: one item per repository, used when AI is unavailable. */
+export function fallbackCommitItems(commits: CommitInput[]): ParsedItem[] {
+  const byRepo = new Map<string, CommitInput[]>();
+  for (const c of commits) {
+    const key = `${c.owner}/${c.repo}`;
+    byRepo.set(key, [...(byRepo.get(key) ?? []), c]);
+  }
+
+  return [...byRepo.entries()].map(([repoKey, list]) => {
+    const subjects = list
+      .map((c) => c.message.split('\n')[0].trim())
+      .filter((m) => m && !/^merge (branch|pull request)/i.test(m));
+    const repoName = repoKey.split('/')[1];
+    const additions = list.reduce((s, c) => s + (c.additions ?? 0), 0);
+    const deletions = list.reduce((s, c) => s + (c.deletions ?? 0), 0);
+
+    return {
+      topic: repoName,
+      title: `Development work on ${repoName}`,
+      project: list[0]?.project_name ?? null,
+      description:
+        `${list.length} commit${list.length === 1 ? '' : 's'} to ${repoKey}` +
+        (additions || deletions ? ` (+${additions}/-${deletions} lines)` : '') +
+        (subjects.length ? `: ${subjects.slice(0, 6).join('; ')}` : ''),
+      work_type: 'Development',
+      status: 'IN_PROGRESS',
+      priority: 'MEDIUM',
+      progress: 50,
+      start_time: null,
+      end_time: null,
+      hours: null,
+      blockers: null,
+      outcome: null,
+      tags: [repoName],
+      confidence: 0.5,
+      ai_generated_fields: ['title', 'status', 'priority', 'progress'],
+    };
+  });
+}
+
+export async function itemsFromCommits(
+  commits: CommitInput[],
+  userId: number,
+  context: { projects: string[]; openTasks: Array<{ task_number: string; title: string }> },
+): Promise<AiResult<ParsedItem[]>> {
+  if (!commits.length) return { ok: true, fallback: false, data: [] };
+
+  const lines = commits.map(
+    (c) =>
+      `- [${c.sha.slice(0, 7)}] ${c.owner}/${c.repo}${c.project_name ? ` (project: ${c.project_name})` : ''}: ` +
+      `${c.message.split('\n')[0]}` +
+      (c.additions !== undefined ? ` (+${c.additions}/-${c.deletions ?? 0}, ${c.files_changed ?? 0} files)` : ''),
+  );
+
+  const prompt = [
+    `Known projects: ${context.projects.join(', ') || 'none recorded'}`,
+    `The developer's open tasks:\n${
+      context.openTasks.map((t) => `- ${t.task_number}: ${t.title}`).join('\n') || 'none'
+    }`,
+    '',
+    `Commits (${commits.length}):`,
+    ...lines,
+  ].join('\n');
+
+  const parsed = await jsonCompletion<{ items: Array<Partial<ParsedItem> & { repos?: string[]; commit_shas?: string[] }> }>(
+    'github_commit_items',
+    userId,
+    COMMIT_SYSTEM,
+    prompt,
+  );
+
+  if (!parsed?.items?.length) {
+    return {
+      ok: false,
+      fallback: true,
+      data: fallbackCommitItems(commits),
+      message: 'AI grouping unavailable. Commits were grouped by repository — please review before saving.',
+    };
+  }
+
+  const clean: ParsedItem[] = parsed.items.slice(0, 12).map((i) => ({
+    topic: i.topic ?? null,
+    title: String(i.title ?? '').slice(0, 240) || 'Development work',
+    project: i.project ?? null,
+    description: i.description ?? null,
+    work_type: i.work_type ?? 'Development',
+    status: i.status ?? 'IN_PROGRESS',
+    priority: i.priority ?? 'MEDIUM',
+    progress: Math.max(0, Math.min(100, Math.round(Number(i.progress ?? 50)))),
+    start_time: null,
+    end_time: null,
+    hours: i.hours === null || i.hours === undefined ? null : Number(i.hours),
+    blockers: null,
+    outcome: i.outcome ?? null,
+    tags: Array.isArray(i.tags) ? i.tags.slice(0, 6).map(String) : [],
+    confidence: Math.max(0, Math.min(1, Number(i.confidence ?? 0.7))),
+    ai_generated_fields: Array.isArray(i.ai_generated_fields) ? i.ai_generated_fields.map(String) : ['title', 'description'],
+  }));
+
+  return { ok: true, fallback: false, data: clean };
+}
