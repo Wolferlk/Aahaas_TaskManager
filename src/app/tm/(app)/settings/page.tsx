@@ -12,6 +12,7 @@ import { Input, Label, FieldError } from '@/components/ui/Field';
 import { Tabs } from '@/components/ui/Tabs';
 import { EmailSettings } from '@/components/tm/settings/EmailSettings';
 import { GithubSettings } from '@/components/tm/settings/GithubSettings';
+import { AutoSubmitSettings } from '@/components/tm/settings/AutoSubmitSettings';
 import { useTheme } from '@/hooks/useTheme';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/components/ui/Toast';
@@ -33,7 +34,12 @@ function SettingsInner() {
     { id: 'appearance', label: 'Appearance' },
     { id: 'security', label: 'Security' },
     { id: 'github', label: 'GitHub' },
-    ...(user?.role === 'MANAGER' ? [{ id: 'email', label: 'Email' }] : []),
+    ...(user?.role === 'MANAGER'
+      ? [
+          { id: 'email', label: 'Email' },
+          { id: 'auto', label: 'Auto Updates' },
+        ]
+      : []),
     { id: 'ai', label: 'AI' },
   ];
 
@@ -48,6 +54,7 @@ function SettingsInner() {
         {tab === 'security' && <SecurityPanel />}
         {tab === 'github' && <GithubSettings />}
         {tab === 'email' && <EmailSettings />}
+        {tab === 'auto' && <AutoSubmitSettings />}
         {tab === 'ai' && <AiPanel />}
       </PageBody>
     </>

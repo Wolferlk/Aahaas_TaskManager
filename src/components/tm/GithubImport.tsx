@@ -23,6 +23,19 @@ export interface ImportedItem {
   tags: string[];
   confidence: number;
   ai_generated_fields: string[];
+  /** The depth drafted from the commits, carried into the review screen so it
+   *  is edited and saved rather than discarded on import. */
+  work_detail: string | null;
+  technical_notes: string | null;
+  impact: string | null;
+  next_steps: string | null;
+  repos?: string[];
+  commit_shas?: string[];
+  commit_count?: number;
+  additions?: number;
+  deletions?: number;
+  files_changed?: number;
+  links?: Array<{ label: string; url: string }>;
 }
 
 interface Commit {

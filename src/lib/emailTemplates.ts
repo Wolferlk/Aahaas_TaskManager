@@ -86,6 +86,9 @@ function shell(title: string, preheader: string, inner: string) {
 export interface DailyUpdateMailItem {
   title: string;
   description?: string | null;
+  work_detail?: string | null;
+  impact?: string | null;
+  next_steps?: string | null;
   status?: string | null;
   priority?: string | null;
   progress?: number | null;
@@ -101,11 +104,46 @@ export interface DailyUpdateMailInput {
   departmentName?: string | null;
   date: string;
   summary?: string | null;
+  detailedSummary?: string | null;
   aiGenerated?: boolean;
+  /** Filed by the 22:00 cut-off rather than by the author. Always disclosed. */
+  autoSubmitted?: boolean;
   blockers?: string | null;
+  nextDayPlan?: string | null;
   totalHours: number;
   items: DailyUpdateMailItem[];
   githubCommits?: number;
+}
+
+/** Renders newline-separated text (and "- " bullets) as mail-safe HTML. */
+function textBlock(value: string, color: string) {
+  const lines = value.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const bullets = lines.filter((l) => l.startsWith('- '));
+  if (bullets.length && bullets.length === lines.length) {
+    return `<ul style="margin:4px 0 0;padding-left:18px;color:${color};font-size:13px;line-height:1.65;">${lines
+      .map((l) => `<li style="padding-bottom:2px;">${esc(l.slice(2))}</li>`)
+      .join('')}</ul>`;
+  }
+  return lines
+    .map(
+      (l) =>
+        `<div style="font-size:13px;color:${color};line-height:1.65;padding-top:4px;">${
+          l.startsWith('- ') ? '&bull; ' + esc(l.slice(2)) : esc(l)
+        }</div>`,
+    )
+    .join('');
+}
+
+/** A titled panel used by the narrative sections. */
+function panel(title: string, body: string, bg: string, border: string, titleColor: string) {
+  return `<tr><td style="padding:16px 28px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${bg};border:1px solid ${border};border-radius:10px;">
+      <tr><td style="padding:13px 15px;">
+        <div style="font-size:11px;font-weight:700;color:${titleColor};text-transform:uppercase;letter-spacing:.5px;">${esc(title)}</div>
+        ${body}
+      </td></tr>
+    </table>
+  </td></tr>`;
 }
 
 export function dailyUpdateEmail(input: DailyUpdateMailInput): { subject: string; html: string } {
@@ -147,6 +185,15 @@ export function dailyUpdateEmail(input: DailyUpdateMailInput): { subject: string
                 ${item.description && item.description !== item.title
                   ? `<div style="font-size:12.5px;color:${MUTED};line-height:1.5;padding-top:3px;">${esc(item.description)}</div>`
                   : ''}
+                ${item.work_detail && item.work_detail !== item.description
+                  ? `<div style="font-size:12.5px;color:#475569;line-height:1.6;padding-top:5px;white-space:pre-line;">${esc(item.work_detail)}</div>`
+                  : ''}
+                ${item.impact
+                  ? `<div style="font-size:12px;color:#15803d;line-height:1.5;padding-top:5px;"><strong>Impact:</strong> ${esc(item.impact)}</div>`
+                  : ''}
+                ${item.next_steps
+                  ? `<div style="font-size:12px;color:#1d4ed8;line-height:1.5;padding-top:3px;"><strong>Next:</strong> ${esc(item.next_steps)}</div>`
+                  : ''}
                 ${meta.length
                   ? `<div style="font-size:11px;color:#94a3b8;padding-top:5px;">${meta.join(' &middot; ')}</div>`
                   : ''}
@@ -170,6 +217,19 @@ export function dailyUpdateEmail(input: DailyUpdateMailInput): { subject: string
   const who = [input.authorTitle, input.teamName ?? input.departmentName].filter(Boolean).join(' &middot; ');
 
   const inner = `
+      ${input.autoSubmitted
+        ? `<tr><td style="padding:16px 28px 0;">
+             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;">
+               <tr><td style="padding:11px 15px;">
+                 <div style="font-size:12.5px;color:#92400e;line-height:1.55;">
+                   <strong>Filed automatically.</strong> No update had been submitted by the 22:00 cut-off,
+                   so this one was drafted from ${input.githubCommits ?? 0} GitHub commit${input.githubCommits === 1 ? '' : 's'}
+                   for the day. ${esc(input.authorName)} has been asked to review and correct it.
+                 </div>
+               </td></tr>
+             </table>
+           </td></tr>`
+        : ''}
       <tr><td style="padding:24px 28px 6px;">
         <div style="font-size:12px;color:${MUTED};text-transform:uppercase;letter-spacing:.6px;font-weight:600;">Daily Update</div>
         <h1 style="margin:6px 0 2px;font-size:20px;font-weight:700;color:${INK};line-height:1.3;">${esc(input.authorName)}</h1>
@@ -198,6 +258,10 @@ export function dailyUpdateEmail(input: DailyUpdateMailInput): { subject: string
            </td></tr>`
         : ''}
 
+      ${input.detailedSummary && input.detailedSummary.trim() !== (input.summary ?? '').trim()
+        ? panel('The day in detail', textBlock(input.detailedSummary, INK), '#f8fafc', LINE, INK)
+        : ''}
+
       <tr><td style="padding:22px 28px 0;">
         <div style="font-size:12px;font-weight:700;color:${INK};text-transform:uppercase;letter-spacing:.5px;">
           Work Items (${input.items.length})
@@ -218,6 +282,10 @@ export function dailyUpdateEmail(input: DailyUpdateMailInput): { subject: string
            </td></tr>`
         : ''}
 
+      ${input.nextDayPlan
+        ? panel('Planned next', textBlock(input.nextDayPlan, INK), '#eff6ff', '#bfdbfe', '#1d4ed8')
+        : ''}
+
       ${input.githubCommits
         ? `<tr><td style="padding:14px 28px 0;">
              <div style="font-size:12px;color:${MUTED};">
@@ -234,7 +302,7 @@ export function dailyUpdateEmail(input: DailyUpdateMailInput): { subject: string
       </td></tr>`;
 
   return {
-    subject: `Daily Update — ${input.authorName} — ${dateLabel}`,
+    subject: `Daily Update${input.autoSubmitted ? ' (auto)' : ''} — ${input.authorName} — ${dateLabel}`,
     html: shell(`Daily Update — ${input.authorName}`, `${completed} completed, ${inProgress} in progress`, inner),
   };
 }

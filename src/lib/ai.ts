@@ -156,6 +156,18 @@ export interface ParsedItem {
   tags: string[];
   confidence: number;
   ai_generated_fields: string[];
+  /** Long-form depth, kept apart from `description` so the review screen can
+   *  show a one-line item and still carry everything underneath it. */
+  work_detail?: string | null;
+  technical_notes?: string | null;
+  impact?: string | null;
+  next_steps?: string | null;
+  repos?: string[];
+  commit_shas?: string[];
+  commit_count?: number;
+  additions?: number;
+  deletions?: number;
+  files_changed?: number;
 }
 
 const PARSER_SYSTEM = `You convert an employee's free-form daily work update into structured work items.
@@ -173,12 +185,19 @@ Rules:
 - hours is a number or null. Only fill it if the text implies a duration.
 - start_time/end_time are "HH:MM" 24h strings or null.
 - confidence is 0.0-1.0 reflecting how directly the text supports the item.
+- work_detail: 2-4 sentences expanding on exactly what was done, in the
+  employee's own terms. Use only what the text supports — if the text is one
+  short clause, keep work_detail short rather than padding it.
+- technical_notes: the technical specifics mentioned (components, endpoints,
+  queries, tools). null when the text has none.
+- impact: who or what this helps, only when the text says or clearly implies it.
+- next_steps: what remains, only when the text mentions it. null otherwise.
 - ai_generated_fields lists field names you inferred rather than read.
 
 Example input: "Completed invoice PDF export, fixed report filters."
 Example output: { "items": [
-  { "title": "Completed invoice PDF export", "description": "Completed invoice PDF export.", "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Invoice", "project": null, "work_type": null, "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": null, "tags": [], "confidence": 0.9, "ai_generated_fields": [] },
-  { "title": "Fixed report filters", "description": "Fixed report filters.", "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Reporting", "project": null, "work_type": null, "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": null, "tags": [], "confidence": 0.9, "ai_generated_fields": [] }
+  { "title": "Completed invoice PDF export", "description": "Completed invoice PDF export.", "work_detail": "Finished the invoice PDF export so an invoice can be downloaded as a PDF.", "technical_notes": null, "impact": null, "next_steps": null, "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Invoice", "project": null, "work_type": null, "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": null, "tags": [], "confidence": 0.9, "ai_generated_fields": [] },
+  { "title": "Fixed report filters", "description": "Fixed report filters.", "work_detail": "Fixed the filters on the report screen so results narrow correctly.", "technical_notes": null, "impact": null, "next_steps": null, "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "topic": "Reporting", "project": null, "work_type": null, "start_time": null, "end_time": null, "hours": null, "blockers": null, "outcome": null, "tags": [], "confidence": 0.9, "ai_generated_fields": [] }
 ] }
 
 Return JSON: { "items": ParsedItem[] }`;
@@ -220,6 +239,10 @@ export function fallbackParse(text: string): ParsedItem[] {
       tags: [],
       confidence: 0.4,
       ai_generated_fields: ['status', 'priority', 'progress'],
+      work_detail: line,
+      technical_notes: null,
+      impact: null,
+      next_steps: null,
     };
   });
 }
@@ -257,6 +280,10 @@ export async function parseDailyUpdate(
     confidence: Math.max(0, Math.min(1, Number(i.confidence ?? 0.5))),
     tags: Array.isArray(i.tags) ? i.tags.slice(0, 8).map(String) : [],
     ai_generated_fields: Array.isArray(i.ai_generated_fields) ? i.ai_generated_fields.map(String) : [],
+    work_detail: i.work_detail ?? i.description ?? null,
+    technical_notes: i.technical_notes ?? null,
+    impact: i.impact ?? null,
+    next_steps: i.next_steps ?? null,
   }));
 
   return { ok: true, fallback: false, data: clean };
@@ -290,6 +317,180 @@ function buildDaySummary(stats: Record<string, unknown>, items: Array<{ status: 
   if (blocked) parts.push(`${blocked} blocked`);
   const hours = Number(stats.total_hours ?? 0);
   return `${parts.join(', ')}${hours ? `, ${hours}h recorded` : ''}.`;
+}
+
+export interface DaySummaryItem {
+  title: string;
+  status: string;
+  work_type?: string | null;
+  project?: string | null;
+  hours?: number | null;
+  work_detail?: string | null;
+  blockers?: string | null;
+  next_steps?: string | null;
+}
+
+export interface DetailedDaySummary {
+  /** 2-3 sentences — what tm_daily_updates.summary has always held. */
+  summary: string;
+  /** The long-form write-up, several paragraphs, stored alongside the update. */
+  detailed_summary: string;
+  highlights: string[];
+  achievements: string[];
+  challenges: string[];
+  learnings: string[];
+  next_day_plan: string[];
+}
+
+const DAY_DETAIL_SYSTEM = `You write an employee's end-of-day work record from their confirmed work items.
+
+Rules:
+- Use ONLY the items, blockers and metrics supplied. Never invent work, numbers,
+  people, tickets or outcomes. If a section has no support in the input, return
+  an empty array for it rather than filling it.
+- summary: 2-3 factual sentences covering what the day contained.
+- detailed_summary: 2-4 short paragraphs (plain text, no markdown headings) that
+  a manager could read on its own — what was worked on, how far each thread got,
+  what is blocked and what carries into tomorrow. Reference items by their real
+  titles.
+- highlights: up to 4 one-line points, the most substantial work first.
+- achievements: only work whose status is COMPLETED.
+- challenges: only blockers, BLOCKED or WAITING items actually present.
+- learnings: only what the items state; usually empty. Do not moralise.
+- next_day_plan: unfinished items and stated next steps, phrased as short
+  forward-looking lines. Empty when everything is complete.
+
+Return JSON: { "summary", "detailed_summary", "highlights": [], "achievements": [],
+"challenges": [], "learnings": [], "next_day_plan": [] }`;
+
+/**
+ * The long-form counterpart to {@link summariseDay}.
+ *
+ * Both a person's own submission and the unattended 22:00 run go through this,
+ * so an auto-filed day reads the same as a typed one. The deterministic build
+ * below is a complete record in its own right, not a placeholder — when OpenAI
+ * is unavailable the update still saves with real detail.
+ */
+export async function detailedDaySummary(
+  userId: number,
+  stats: Record<string, unknown>,
+  items: DaySummaryItem[],
+  context: { blockers?: string | null; github?: { commits: number; repos: string[] } | null } = {},
+): Promise<AiResult<DetailedDaySummary>> {
+  const deterministic = buildDetailedDaySummary(stats, items, context);
+
+  const lines = items.map((i) => {
+    const bits = [`- [${i.status}] ${i.title}`];
+    if (i.project) bits.push(`(project: ${i.project})`);
+    if (i.work_type) bits.push(`(type: ${i.work_type})`);
+    if (i.hours) bits.push(`(${i.hours}h)`);
+    const head = bits.join(' ');
+    const extra = [
+      i.work_detail ? `    detail: ${i.work_detail.replace(/\s+/g, ' ').slice(0, 600)}` : null,
+      i.blockers ? `    blocker: ${i.blockers.slice(0, 300)}` : null,
+      i.next_steps ? `    next: ${i.next_steps.slice(0, 300)}` : null,
+    ].filter(Boolean);
+    return [head, ...extra].join('\n');
+  });
+
+  const parsed = await jsonCompletion<DetailedDaySummary>(
+    'day_detailed_summary',
+    userId,
+    DAY_DETAIL_SYSTEM,
+    [
+      `Metrics: ${JSON.stringify(stats)}`,
+      context.github ? `GitHub activity: ${context.github.commits} commits in ${context.github.repos.join(', ')}` : '',
+      context.blockers ? `Blockers the employee recorded: ${context.blockers}` : '',
+      '',
+      `Work items (${items.length}):`,
+      ...lines,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  );
+
+  if (!parsed?.summary || !parsed.detailed_summary) {
+    return {
+      ok: false,
+      fallback: true,
+      data: deterministic,
+      message: 'AI analysis unavailable. The update was recorded from your items exactly as entered.',
+    };
+  }
+
+  const list = (v: unknown, max: number) =>
+    Array.isArray(v) ? v.slice(0, max).map((x) => String(x).slice(0, 400)) : [];
+
+  return {
+    ok: true,
+    fallback: false,
+    data: {
+      summary: String(parsed.summary).slice(0, 2000),
+      detailed_summary: String(parsed.detailed_summary).slice(0, 16000),
+      highlights: list(parsed.highlights, 6),
+      achievements: list(parsed.achievements, 8),
+      challenges: list(parsed.challenges, 8),
+      learnings: list(parsed.learnings, 6),
+      next_day_plan: list(parsed.next_day_plan, 8),
+    },
+  };
+}
+
+/** Builds the same record from the items alone, with no model involved. */
+function buildDetailedDaySummary(
+  stats: Record<string, unknown>,
+  items: DaySummaryItem[],
+  context: { blockers?: string | null; github?: { commits: number; repos: string[] } | null },
+): DetailedDaySummary {
+  const done = items.filter((i) => i.status === 'COMPLETED');
+  const ongoing = items.filter((i) => i.status === 'IN_PROGRESS' || i.status === 'REVIEW');
+  const stuck = items.filter((i) => i.status === 'BLOCKED' || i.status === 'WAITING');
+  const hours = Number(stats.total_hours ?? 0);
+
+  const paragraphs: string[] = [];
+  paragraphs.push(
+    `${items.length} work item${items.length === 1 ? '' : 's'} recorded` +
+      (hours ? ` across ${hours}h` : '') +
+      `: ${done.length} completed, ${ongoing.length} in progress, ${stuck.length} blocked or waiting.` +
+      (context.github
+        ? ` Drafted from ${context.github.commits} commit${context.github.commits === 1 ? '' : 's'} in ${context.github.repos.join(', ')}.`
+        : ''),
+  );
+
+  for (const group of [
+    { label: 'Completed', list: done },
+    { label: 'In progress', list: ongoing },
+    { label: 'Blocked or waiting', list: stuck },
+  ]) {
+    if (!group.list.length) continue;
+    paragraphs.push(
+      `${group.label}:\n` +
+        group.list
+          .map((i) => {
+            const detail = i.work_detail?.replace(/\s+/g, ' ').trim();
+            return `- ${i.title}${i.hours ? ` (${i.hours}h)` : ''}${detail ? ` — ${detail.slice(0, 400)}` : ''}`;
+          })
+          .join('\n'),
+    );
+  }
+
+  if (context.blockers) paragraphs.push(`Blockers: ${context.blockers}`);
+
+  return {
+    summary: buildDaySummary(stats, items),
+    detailed_summary: paragraphs.join('\n\n'),
+    highlights: [...done, ...ongoing].slice(0, 4).map((i) => `${i.title} (${i.status.replace('_', ' ').toLowerCase()})`),
+    achievements: done.map((i) => i.title),
+    challenges: [
+      ...stuck.map((i) => `${i.title}${i.blockers ? ` — ${i.blockers}` : ''}`),
+      ...(context.blockers ? [context.blockers] : []),
+    ],
+    learnings: [],
+    next_day_plan: [
+      ...ongoing.map((i) => i.next_steps?.trim() || `Continue ${i.title}`),
+      ...stuck.map((i) => `Unblock ${i.title}`),
+    ].slice(0, 8),
+  };
 }
 
 export async function interpretPerformance(
@@ -423,9 +624,20 @@ Rules:
 - tags: up to 4 short lowercase keywords.
 - confidence: 0.0-1.0, how clearly the commits support the item.
 
-Return JSON: { "items": [ { "title", "description", "status", "priority",
-"progress", "hours", "work_type", "project", "repos": [], "commit_shas": [],
-"tags": [], "confidence" } ] }`;
+This update is often filed unattended, so the detail has to stand on its own:
+- work_detail: 2-4 sentences a reviewer can read tomorrow without opening the
+  repository — which area of the product changed, what the change does, and
+  which commits it draws on. Stay strictly within the commit messages.
+- technical_notes: the concrete technical surface touched, as the commit
+  subjects name it (modules, endpoints, migrations, configs). null if unclear.
+- impact: who benefits or what now works, ONLY when the commits state it.
+- next_steps: remaining work the commits point to (a TODO, a partial rename,
+  a "wip" subject). null when the commits read as finished.
+
+Return JSON: { "items": [ { "title", "description", "work_detail",
+"technical_notes", "impact", "next_steps", "status", "priority", "progress",
+"hours", "work_type", "project", "repos": [], "commit_shas": [], "tags": [],
+"confidence" } ] }`;
 
 /** Deterministic grouping: one item per repository, used when AI is unavailable. */
 export function fallbackCommitItems(commits: CommitInput[]): ParsedItem[] {
@@ -442,6 +654,8 @@ export function fallbackCommitItems(commits: CommitInput[]): ParsedItem[] {
     const repoName = repoKey.split('/')[1];
     const additions = list.reduce((s, c) => s + (c.additions ?? 0), 0);
     const deletions = list.reduce((s, c) => s + (c.deletions ?? 0), 0);
+    const files = list.reduce((s, c) => s + (c.files_changed ?? 0), 0);
+    const times = list.map((c) => new Date(c.committed_at)).sort((a, b) => a.getTime() - b.getTime());
 
     return {
       topic: repoName,
@@ -463,8 +677,29 @@ export function fallbackCommitItems(commits: CommitInput[]): ParsedItem[] {
       tags: [repoName],
       confidence: 0.5,
       ai_generated_fields: ['title', 'status', 'priority', 'progress'],
+      // Without AI grouping the commit list itself is the detail: every
+      // subject is kept so the record still says what the day contained.
+      work_detail:
+        `Committed to ${repoKey} between ${hhmm(times[0])} and ${hhmm(times[times.length - 1])}.\n` +
+        subjects.map((m) => `- ${m}`).join('\n'),
+      technical_notes:
+        additions || deletions || files
+          ? `+${additions}/-${deletions} lines across ${files} file${files === 1 ? '' : 's'}.`
+          : null,
+      impact: null,
+      next_steps: null,
+      repos: [repoKey],
+      commit_shas: list.map((c) => c.sha.slice(0, 7)),
+      commit_count: list.length,
+      additions,
+      deletions,
+      files_changed: files,
     };
   });
+}
+
+function hhmm(d: Date | undefined) {
+  return d ? d.toTimeString().slice(0, 5) : '—';
 }
 
 export async function itemsFromCommits(
@@ -491,7 +726,7 @@ export async function itemsFromCommits(
     ...lines,
   ].join('\n');
 
-  const parsed = await jsonCompletion<{ items: Array<Partial<ParsedItem> & { repos?: string[]; commit_shas?: string[] }> }>(
+  const parsed = await jsonCompletion<{ items: Array<Partial<ParsedItem>> }>(
     'github_commit_items',
     userId,
     COMMIT_SYSTEM,
@@ -507,24 +742,49 @@ export async function itemsFromCommits(
     };
   }
 
-  const clean: ParsedItem[] = parsed.items.slice(0, 12).map((i) => ({
-    topic: i.topic ?? null,
-    title: String(i.title ?? '').slice(0, 240) || 'Development work',
-    project: i.project ?? null,
-    description: i.description ?? null,
-    work_type: i.work_type ?? 'Development',
-    status: i.status ?? 'IN_PROGRESS',
-    priority: i.priority ?? 'MEDIUM',
-    progress: Math.max(0, Math.min(100, Math.round(Number(i.progress ?? 50)))),
-    start_time: null,
-    end_time: null,
-    hours: i.hours === null || i.hours === undefined ? null : Number(i.hours),
-    blockers: null,
-    outcome: i.outcome ?? null,
-    tags: Array.isArray(i.tags) ? i.tags.slice(0, 6).map(String) : [],
-    confidence: Math.max(0, Math.min(1, Number(i.confidence ?? 0.7))),
-    ai_generated_fields: Array.isArray(i.ai_generated_fields) ? i.ai_generated_fields.map(String) : ['title', 'description'],
-  }));
+  // Line-change totals are recomputed from the commits the model grouped —
+  // never taken from the model itself, which must not invent numbers.
+  const bySha = new Map(commits.map((c) => [c.sha.slice(0, 7), c]));
+
+  const clean: ParsedItem[] = parsed.items.slice(0, 12).map((i) => {
+    const shas = (Array.isArray(i.commit_shas) ? i.commit_shas : [])
+      .map((sha) => String(sha).slice(0, 7))
+      .filter((sha) => bySha.has(sha));
+    const grouped = shas.map((sha) => bySha.get(sha)!);
+
+    return {
+      topic: i.topic ?? null,
+      title: String(i.title ?? '').slice(0, 240) || 'Development work',
+      project: i.project ?? null,
+      description: i.description ?? null,
+      work_type: i.work_type ?? 'Development',
+      status: i.status ?? 'IN_PROGRESS',
+      priority: i.priority ?? 'MEDIUM',
+      progress: Math.max(0, Math.min(100, Math.round(Number(i.progress ?? 50)))),
+      start_time: null,
+      end_time: null,
+      hours: i.hours === null || i.hours === undefined ? null : Number(i.hours),
+      blockers: null,
+      outcome: i.outcome ?? null,
+      tags: Array.isArray(i.tags) ? i.tags.slice(0, 6).map(String) : [],
+      confidence: Math.max(0, Math.min(1, Number(i.confidence ?? 0.7))),
+      ai_generated_fields: Array.isArray(i.ai_generated_fields)
+        ? i.ai_generated_fields.map(String)
+        : ['title', 'description'],
+      work_detail: i.work_detail ?? i.description ?? null,
+      technical_notes: i.technical_notes ?? null,
+      impact: i.impact ?? null,
+      next_steps: i.next_steps ?? null,
+      repos: Array.isArray(i.repos)
+        ? i.repos.slice(0, 10).map(String)
+        : [...new Set(grouped.map((c) => `${c.owner}/${c.repo}`))],
+      commit_shas: shas,
+      commit_count: grouped.length || undefined,
+      additions: grouped.length ? grouped.reduce((sum, c) => sum + (c.additions ?? 0), 0) : undefined,
+      deletions: grouped.length ? grouped.reduce((sum, c) => sum + (c.deletions ?? 0), 0) : undefined,
+      files_changed: grouped.length ? grouped.reduce((sum, c) => sum + (c.files_changed ?? 0), 0) : undefined,
+    };
+  });
 
   return { ok: true, fallback: false, data: clean };
 }

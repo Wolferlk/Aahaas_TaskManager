@@ -151,6 +151,31 @@ export const projectSchema = z.object({
   member_ids: z.array(z.coerce.number().int().positive()).max(100).optional(),
 });
 
+/**
+ * Per-item depth. Everything here is optional — a one-line item stays a
+ * one-line item — but when it is supplied it is stored verbatim next to the
+ * item rather than being folded into the description.
+ */
+export const dailyUpdateItemDetailSchema = z.object({
+  work_detail: z.string().max(20000).nullable().optional(),
+  technical_notes: z.string().max(6000).nullable().optional(),
+  impact: z.string().max(4000).nullable().optional(),
+  next_steps: z.string().max(4000).nullable().optional(),
+  collaborators: z.string().max(400).nullable().optional(),
+  repos: z.string().max(400).nullable().optional(),
+  links: z
+    .array(z.object({ label: z.string().max(200), url: z.string().max(600) }))
+    .max(30)
+    .nullable()
+    .optional(),
+  commit_shas: z.array(z.string().max(40)).max(100).nullable().optional(),
+  commit_count: z.coerce.number().int().min(0).nullable().optional(),
+  additions: z.coerce.number().int().min(0).nullable().optional(),
+  deletions: z.coerce.number().int().min(0).nullable().optional(),
+  files_changed: z.coerce.number().int().min(0).nullable().optional(),
+  source: z.enum(['MANUAL', 'AI', 'GITHUB']).default('MANUAL'),
+});
+
 export const dailyUpdateItemSchema = z.object({
   id: z.coerce.number().int().positive().optional(),
   task_id: nullableId,
@@ -171,6 +196,22 @@ export const dailyUpdateItemSchema = z.object({
   confidence: z.coerce.number().min(0).max(1).nullable().optional(),
   ai_generated: z.boolean().default(false),
   linked_action: z.enum(['NONE', 'ATTACHED', 'CREATED']).default('NONE'),
+  detail: dailyUpdateItemDetailSchema.partial().optional(),
+});
+
+/**
+ * Day-level narrative. Whatever the submitter writes here is authoritative;
+ * AI only ever fills a field that was left empty.
+ */
+export const dailyUpdateDetailSchema = z.object({
+  detailed_summary: z.string().max(20000).nullable().optional(),
+  highlights: z.string().max(6000).nullable().optional(),
+  achievements: z.string().max(6000).nullable().optional(),
+  challenges: z.string().max(6000).nullable().optional(),
+  learnings: z.string().max(6000).nullable().optional(),
+  collaboration: z.string().max(4000).nullable().optional(),
+  next_day_plan: z.string().max(6000).nullable().optional(),
+  focus_area: z.string().max(200).nullable().optional(),
 });
 
 export const dailyUpdateSchema = z.object({
@@ -180,6 +221,7 @@ export const dailyUpdateSchema = z.object({
   status: z.enum(['DRAFT', 'SUBMITTED']).default('SUBMITTED'),
   blockers: z.string().max(4000).nullable().optional(),
   mood: z.string().max(30).nullable().optional(),
+  detail: dailyUpdateDetailSchema.optional(),
   items: z.array(dailyUpdateItemSchema).max(60),
 });
 
