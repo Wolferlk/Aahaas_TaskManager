@@ -29,8 +29,10 @@ function splitStatements(sql) {
     .filter(Boolean);
 }
 
-const sqlPath = path.join(process.cwd(), 'db', 'schema.sql');
-const statements = splitStatements(fs.readFileSync(sqlPath, 'utf8'));
+// Every db/*.sql file, applied in filename order. Each is additive-only.
+const sqlDir = path.join(process.cwd(), 'db');
+const sqlFiles = fs.readdirSync(sqlDir).filter((f) => f.endsWith('.sql')).sort();
+const statements = sqlFiles.flatMap((f) => splitStatements(fs.readFileSync(path.join(sqlDir, f), 'utf8')));
 
 // --- Static verification pass (nothing runs until every statement passes) ---
 const problems = [];
@@ -73,7 +75,7 @@ const foreignBefore = [...beforeNames].filter((n) => !n.startsWith('tm_')).sort(
 
 console.log(`Connected to ${cfg.database}@${cfg.host}`);
 console.log(`Existing tables: ${beforeNames.size} (non-module: ${foreignBefore.length})`);
-console.log(`Applying ${statements.length} additive statements...\n`);
+console.log(`Applying ${statements.length} additive statements from ${sqlFiles.join(', ')}...\n`);
 
 let created = 0;
 let skipped = 0;

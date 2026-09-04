@@ -1,4 +1,5 @@
 import { Providers } from '@/components/tm/Providers';
+import { Logo } from '@/components/tm/Logo';
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -10,9 +11,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         </div>
         <div className="relative w-full max-w-md">
           <div className="mb-8 flex flex-col items-center gap-3 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand text-lg font-bold text-brand-ink shadow-glow">
-              A
-            </div>
+            <Logo size="lg" priority />
             <div>
               <p className="text-lg font-semibold text-ink">Aahaas Task Management</p>
               <p className="text-sm text-muted">Internal productivity platform</p>

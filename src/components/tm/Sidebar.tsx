@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useSession } from '@/hooks/useSession';
+import { Logo } from './Logo';
+import { Avatar } from '@/components/ui/Avatar';
 
 interface NavItem {
   href: string;
@@ -65,13 +67,11 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
       )}
     >
       <div className="flex h-16 items-center gap-2.5 px-4">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand text-sm font-bold text-brand-ink">
-          A
-        </div>
+        <Logo size="sm" priority />
         {!collapsed && (
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-ink">Aahaas TM</p>
-            <p className="truncate text-xs text-muted">Task Management</p>
+            <p className="truncate text-sm font-semibold leading-tight text-ink">Aahaas</p>
+            <p className="truncate text-xs leading-tight text-muted">Task Management</p>
           </div>
         )}
       </div>
@@ -138,9 +138,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
           href="/tm/profile"
           className="focus-ring flex items-center gap-3 rounded-xl px-2 py-2 text-sm hover:bg-line/30"
         >
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-soft text-xs font-semibold text-brand">
-            {user.full_name.slice(0, 1)}
-          </div>
+          <Avatar name={user.full_name} src={user.avatar_url} size="sm" />
           {!collapsed && (
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-ink">{user.full_name}</p>

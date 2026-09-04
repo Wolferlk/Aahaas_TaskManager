@@ -10,8 +10,9 @@
   --ink: 15 23 42;
   --muted: 100 116 139;
   --faint: 148 163 184;
-  --brand: 79 70 229;
-  --brand-soft: 238 242 255;
+  --brand: 230 24 45;
+  --brand-pure: 255 38 56;
+  --brand-soft: 255 240 241;
   --brand-ink: 255 255 255;
 }
 
@@ -25,9 +26,10 @@
     --ink: 241 245 249;
     --muted: 148 163 184;
     --faint: 100 116 139;
-    --brand: 129 140 248;
-    --brand-soft: 30 27 56;
-    --brand-ink: 15 15 25;
+    --brand: 255 122 133;
+    --brand-pure: 255 38 56;
+    --brand-soft: 56 20 26;
+    --brand-ink: 26 6 10;
   }
 }
 
@@ -39,9 +41,10 @@
   --ink: 241 245 249;
   --muted: 148 163 184;
   --faint: 100 116 139;
-  --brand: 129 140 248;
-  --brand-soft: 30 27 56;
-  --brand-ink: 15 15 25;
+  --brand: 255 122 133;
+  --brand-pure: 255 38 56;
+  --brand-soft: 56 20 26;
+  --brand-ink: 26 6 10;
 }
 
 * { border-color: rgb(var(--line)); }

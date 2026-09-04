@@ -9,6 +9,7 @@ import { CommandPalette } from './CommandPalette';
 import { TaskFormModal } from './TaskFormModal';
 import { useSession } from '@/hooks/useSession';
 import { Spinner } from '@/components/ui/Misc';
+import { Logo } from './Logo';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, loading } = useSession();
@@ -34,7 +35,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (loading || !user) {
     return (
-      <div className="flex h-screen items-center justify-center bg-bg">
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-bg">
+        <Logo size="lg" priority className="animate-pulse" />
         <Spinner />
       </div>
     );
