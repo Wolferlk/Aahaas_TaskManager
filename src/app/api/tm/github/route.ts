@@ -59,7 +59,14 @@ export async function POST(req: Request) {
     const user = await requireUser();
     const { token } = await parseBody(req, connectSchema);
 
-    const identity = await verifyToken(token);
+    // GitHub's own rejection message is the useful one here — surface it as a
+    // 400 rather than letting it fall through to a generic 500.
+    let identity;
+    try {
+      identity = await verifyToken(token);
+    } catch (err) {
+      throw badRequest(err instanceof Error ? err.message : 'Could not verify that token with GitHub.');
+    }
 
     await execute(
       `INSERT INTO tm_github_connections
