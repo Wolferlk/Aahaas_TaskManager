@@ -173,7 +173,9 @@ export default function NewDailyUpdatePage() {
     setItems((prev) => [
       ...prev,
       ...imported.map<ParsedItem>((i) => ({
-        topic: i.work_type ?? null,
+        // The heading the update mail groups this item under — the project it
+        // matched, else the repository it came from.
+        topic: i.project ?? i.repos?.[0] ?? i.work_type ?? null,
         title: i.title,
         project: i.project,
         project_id: i.project_id ?? null,
