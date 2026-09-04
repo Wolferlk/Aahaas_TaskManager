@@ -2,13 +2,14 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Sparkles, Wand2, Plus, Trash2, CheckCircle2, AlertTriangle, Link2 } from 'lucide-react';
+import { Sparkles, Wand2, Plus, Trash2, CheckCircle2, AlertTriangle, Link2, Github, Mail } from 'lucide-react';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Label, Select, Textarea } from '@/components/ui/Field';
 import { apiPost, ApiClientError } from '@/lib/client';
 import { useToast } from '@/components/ui/Toast';
+import { GithubImport, type ImportedItem } from '@/components/tm/GithubImport';
 
 interface ParsedItem {
   topic: string | null;
@@ -30,20 +31,27 @@ interface ParsedItem {
   suggested_task: { id: number; task_number: string; title: string; confidence: number } | null;
   linked_action: 'NONE' | 'ATTACHED' | 'CREATED';
   keep: boolean;
+  project_id?: number | null;
+  source?: 'AI' | 'GITHUB' | 'MANUAL';
 }
 
 const STATUS_OPTIONS = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED'];
 const PRIORITY_OPTIONS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
 export default function NewDailyUpdatePage() {
-  const [mode, setMode] = useState<'paste' | 'manual'>('paste');
+  const [mode, setMode] = useState<'paste' | 'github' | 'manual'>('paste');
+  const [githubMeta, setGithubMeta] = useState<{ commits: number; aiUsed: boolean } | null>(null);
   const [rawText, setRawText] = useState('');
   const [parsing, setParsing] = useState(false);
   const [parseMessage, setParseMessage] = useState<{ tone: 'ai' | 'fallback'; text: string } | null>(null);
   const [items, setItems] = useState<ParsedItem[]>([]);
   const [blockers, setBlockers] = useState('');
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState<{ summary: string; ai_used: boolean } | null>(null);
+  const [saved, setSaved] = useState<{
+    summary: string;
+    ai_used: boolean;
+    mail?: { attempted: boolean; sent?: boolean; recipients?: number; error?: string };
+  } | null>(null);
   const toast = useToast();
   const router = useRouter();
 
