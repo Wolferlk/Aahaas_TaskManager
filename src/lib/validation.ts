@@ -214,8 +214,22 @@ export const dailyUpdateDetailSchema = z.object({
   focus_area: z.string().max(200).nullable().optional(),
 });
 
+/**
+ * A day may be recorded late — that is the point of backfilling a missed one —
+ * but never early. Tomorrow is allowed as the boundary so a submitter whose
+ * clock is ahead of the server's is not turned away at midnight.
+ */
+const recordableDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a valid date.')
+  .refine((value) => {
+    const limit = new Date(Date.now() + 864e5);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return value <= `${limit.getFullYear()}-${pad(limit.getMonth() + 1)}-${pad(limit.getDate())}`;
+  }, 'You cannot record a day that has not happened yet.');
+
 export const dailyUpdateSchema = z.object({
-  update_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a valid date.'),
+  update_date: recordableDate,
   raw_text: z.string().max(50000).nullable().optional(),
   source: z.enum(['MANUAL', 'AI_PARSED', 'MIXED']).default('MANUAL'),
   status: z.enum(['DRAFT', 'SUBMITTED']).default('SUBMITTED'),

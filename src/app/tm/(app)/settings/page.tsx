@@ -13,6 +13,7 @@ import { Tabs } from '@/components/ui/Tabs';
 import { EmailSettings } from '@/components/tm/settings/EmailSettings';
 import { GithubSettings } from '@/components/tm/settings/GithubSettings';
 import { AutoSubmitSettings } from '@/components/tm/settings/AutoSubmitSettings';
+import { DailyMailRoutes } from '@/components/tm/settings/DailyMailRoutes';
 import { useTheme } from '@/hooks/useTheme';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/components/ui/Toast';
@@ -30,10 +31,13 @@ function SettingsInner() {
     else if (params.get('tab')) setTab(params.get('tab')!);
   }, [params]);
 
+  // Everyone can see where their own daily update is mailed; only a Manager
+  // gets the global recipient list and the cut-off sweep.
   const tabs = [
     { id: 'appearance', label: 'Appearance' },
     { id: 'security', label: 'Security' },
     { id: 'github', label: 'GitHub' },
+    { id: 'daily-mail', label: 'Daily Mail' },
     ...(user?.role === 'MANAGER'
       ? [
           { id: 'email', label: 'Email' },
@@ -49,10 +53,11 @@ function SettingsInner() {
       <div className="px-4 pt-4 sm:px-6">
         <Tabs tabs={tabs} active={tab} onChange={setTab} />
       </div>
-      <PageBody className="mx-auto max-w-3xl">
+      <PageBody className={tab === 'daily-mail' ? 'mx-auto max-w-5xl' : 'mx-auto max-w-3xl'}>
         {tab === 'appearance' && <AppearancePanel />}
         {tab === 'security' && <SecurityPanel />}
         {tab === 'github' && <GithubSettings />}
+        {tab === 'daily-mail' && <DailyMailRoutes />}
         {tab === 'email' && <EmailSettings />}
         {tab === 'auto' && <AutoSubmitSettings />}
         {tab === 'ai' && <AiPanel />}

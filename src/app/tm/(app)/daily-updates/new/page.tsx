@@ -1,16 +1,19 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import useSWR from 'swr';
 import {
   Sparkles, Wand2, Plus, Trash2, CheckCircle2, AlertTriangle, Link2, Github, Mail,
-  ChevronDown, ChevronRight, GitCommit, NotebookPen,
+  ChevronDown, ChevronRight, GitCommit, NotebookPen, CalendarPlus, History, Clock3,
 } from 'lucide-react';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Label, Select, Textarea } from '@/components/ui/Field';
-import { apiPost, ApiClientError } from '@/lib/client';
+import { apiPost, fetcher, ApiClientError } from '@/lib/client';
+import { fmtDate } from '@/lib/format';
+import { cn } from '@/lib/cn';
 import { useToast } from '@/components/ui/Toast';
 import { GithubImport, type ImportedItem } from '@/components/tm/GithubImport';
 
@@ -101,9 +104,25 @@ const emptyDay = (): DayDetail => ({
   next_day_plan: '',
 });
 
-export default function NewDailyUpdatePage() {
+/** The days this person still owes, used to offer a one-tap catch-up. */
+interface Coverage {
+  today: string;
+  missing: string[];
+  streak: number;
+}
+
+function NewDailyUpdateForm() {
+  const params = useSearchParams();
   const [mode, setMode] = useState<'paste' | 'github' | 'manual'>('paste');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  // ?date=YYYY-MM-DD lands straight on a missed day, so the "catch up" links
+  // on the hub open this screen already pointed at the right one.
+  const today = new Date().toISOString().slice(0, 10);
+  const [date, setDate] = useState(() => {
+    const wanted = params.get('date');
+    return wanted && /^\d{4}-\d{2}-\d{2}$/.test(wanted) && wanted <= today ? wanted : today;
+  });
+  const { data: cover, mutate: refreshCover } = useSWR<Coverage>('/api/tm/daily-updates/missing?days=28', fetcher);
+  const backfill = date !== today;
   const [githubMeta, setGithubMeta] = useState<{ commits: number; aiUsed: boolean } | null>(null);
   const [rawText, setRawText] = useState('');
   const [parsing, setParsing] = useState(false);
@@ -122,6 +141,13 @@ export default function NewDailyUpdatePage() {
   } | null>(null);
   const toast = useToast();
   const router = useRouter();
+
+  // Navigating from one missed day to another keeps this screen mounted, so
+  // the picker has to follow the query string rather than only its initial value.
+  useEffect(() => {
+    const wanted = params.get('date');
+    if (wanted && /^\d{4}-\d{2}-\d{2}$/.test(wanted) && wanted <= today) setDate(wanted);
+  }, [params, today]);
 
   const runParse = async () => {
     if (!rawText.trim()) {
@@ -281,13 +307,17 @@ export default function NewDailyUpdatePage() {
         })),
       });
       setSaved({ summary: res.summary, detailed_summary: res.detailed_summary, ai_used: res.ai_used, mail: res.mail });
-      toast({ kind: 'success', title: 'Daily update saved' });
+      refreshCover();
+      toast({ kind: 'success', title: backfill ? 'Missed day recorded' : 'Daily update saved' });
     } catch (err) {
       toast({ kind: 'error', title: err instanceof ApiClientError ? err.message : 'Could not save your update.' });
     } finally {
       setSaving(false);
     }
   };
+
+  // The next unrecorded working day, so a catch-up session can keep going.
+  const nextMissing = (cover?.missing ?? []).find((d) => d !== date) ?? null;
 
   if (saved) {
     return (
@@ -319,9 +349,36 @@ export default function NewDailyUpdatePage() {
                   : `Saved, but the email could not be sent: ${saved.mail.error ?? 'unknown error'}`}
               </p>
             )}
+            {nextMissing && (
+              <div className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-3.5 text-left">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                  <Clock3 className="h-3.5 w-3.5" /> One more gap to close
+                </p>
+                <p className="mt-1 text-xs text-muted">
+                  {fmtDate(nextMissing, { weekday: 'long', month: 'long', day: 'numeric' })} is still unrecorded.
+                </p>
+                <Button
+                  size="sm"
+                  className="mt-2.5"
+                  onClick={() => {
+                    setSaved(null);
+                    setItems([]);
+                    setRawText('');
+                    setBlockers('');
+                    setMood('');
+                    setDay(emptyDay());
+                    setGithubMeta(null);
+                    setParseMessage(null);
+                    setDate(nextMissing);
+                  }}
+                >
+                  <CalendarPlus className="h-3.5 w-3.5" /> Record that day too
+                </Button>
+              </div>
+            )}
             <div className="mt-6 flex justify-center gap-2">
               <Button variant="secondary" onClick={() => router.push('/tm/daily-updates/history')}>View history</Button>
-              <Button onClick={() => router.push('/tm/dashboard')}>Back to dashboard</Button>
+              <Button onClick={() => router.push('/tm/daily-updates')}>Back to daily updates</Button>
             </div>
           </CardContent>
         </Card>
@@ -331,8 +388,82 @@ export default function NewDailyUpdatePage() {
 
   return (
     <>
-      <PageHeader title="Daily Update" subtitle="Log what you worked on today" />
+      <PageHeader
+        title={backfill ? 'Record a missed day' : 'Daily Update'}
+        subtitle={backfill ? 'A late entry is stored and emailed exactly like a same-day one' : 'Log what you worked on today'}
+      />
       <PageBody className="mx-auto max-w-3xl space-y-5">
+        {/* Which day is being recorded, stated before anything is typed. */}
+        <Card className={cn('animate-pop-in', backfill ? 'border-amber-500/35' : 'border-brand/25')}>
+          <CardContent className="p-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-[190px] flex-1">
+                <Label className="flex items-center gap-1.5 text-xs">
+                  {backfill ? (
+                    <CalendarPlus className="h-3.5 w-3.5 text-amber-500" />
+                  ) : (
+                    <NotebookPen className="h-3.5 w-3.5 text-brand" />
+                  )}
+                  Recording the day of
+                </Label>
+                <Input
+                  type="date"
+                  value={date}
+                  max={today}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="!h-10 font-medium"
+                />
+              </div>
+              {backfill && (
+                <Button size="sm" variant="ghost" onClick={() => setDate(today)}>
+                  Switch to today
+                </Button>
+              )}
+              {typeof cover?.streak === 'number' && cover.streak > 0 && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-500/12 px-3 py-1.5 text-xs font-medium text-orange-600 dark:text-orange-400">
+                  <History className="h-3.5 w-3.5" />
+                  <span className="font-bold tabular-nums">{cover.streak}</span> day streak
+                </span>
+              )}
+            </div>
+
+            {backfill && (
+              <p className="mt-3 flex items-start gap-1.5 rounded-xl bg-amber-500/10 px-3 py-2.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                You are filling in{' '}
+                <strong className="font-semibold">
+                  {fmtDate(date, { weekday: 'long', day: 'numeric', month: 'long' })}
+                </strong>
+                , not today. Recording it replaces anything already saved for that date.
+              </p>
+            )}
+
+            {!!cover?.missing.length && (
+              <div className="mt-3 border-t border-line/70 pt-3">
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">
+                  Still unrecorded ({cover.missing.length})
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {cover.missing.slice(0, 12).map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => setDate(d)}
+                      className={cn(
+                        'focus-ring rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                        d === date
+                          ? 'border-brand bg-brand-soft text-brand'
+                          : 'border-line text-muted hover:border-amber-500/50 hover:text-ink',
+                      )}
+                    >
+                      {fmtDate(d, { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           {(
             [
@@ -629,11 +760,7 @@ export default function NewDailyUpdatePage() {
 
             <Card>
               <CardContent className="space-y-3 p-4">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <div>
-                    <Label className="text-xs">Date</Label>
-                    <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="!h-9 text-sm" />
-                  </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <Label className="text-xs">Main focus today</Label>
                     <Input
@@ -711,11 +838,21 @@ export default function NewDailyUpdatePage() {
             </Card>
 
             <Button size="lg" className="w-full" onClick={save} loading={saving}>
-              Save Daily Update
+              {backfill
+                ? `Save the update for ${fmtDate(date, { day: 'numeric', month: 'short' })}`
+                : 'Save Daily Update'}
             </Button>
           </div>
         )}
       </PageBody>
     </>
+  );
+}
+
+export default function NewDailyUpdatePage() {
+  return (
+    <Suspense fallback={null}>
+      <NewDailyUpdateForm />
+    </Suspense>
   );
 }

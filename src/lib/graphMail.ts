@@ -11,6 +11,14 @@ import { execute } from './db';
 
 const TOKEN_SKEW_MS = 60_000;
 
+/**
+ * Every system message leaves from the shared Aahaas mailbox unless an
+ * operator names another one in GRAPH_USER. Keeping the default here rather
+ * than only in .env means a fresh deployment still sends from the right
+ * address instead of silently reporting "not configured".
+ */
+export const DEFAULT_SENDER = 'info@aahaas.com';
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
 /** Application permissions (`roles`) carried by the current app-only token. */
@@ -41,12 +49,12 @@ function explainDenial(roles: string[]): string {
 }
 
 export function graphConfigured() {
-  return Boolean(
-    process.env.GRAPH_CLIENT_ID &&
-      process.env.GRAPH_TENANT_ID &&
-      process.env.GRAPH_CLIENT_SECRET &&
-      process.env.GRAPH_USER,
-  );
+  return Boolean(process.env.GRAPH_CLIENT_ID && process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_SECRET);
+}
+
+/** The mailbox every outbound message is sent from. */
+export function senderAddress(): string {
+  return unquote(process.env.GRAPH_USER) || DEFAULT_SENDER;
 }
 
 function unquote(v: string | undefined) {
@@ -145,7 +153,7 @@ export async function sendMail(input: SendMailInput): Promise<{ ok: boolean; err
 
   try {
     const token = await getToken();
-    const sender = unquote(process.env.GRAPH_USER)!;
+    const sender = senderAddress();
 
     const res = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(sender)}/sendMail`, {
       method: 'POST',
@@ -207,7 +215,7 @@ export async function verifyGraph(): Promise<{
       ok: canSend,
       can_send: canSend,
       roles,
-      sender: unquote(process.env.GRAPH_USER),
+      sender: senderAddress(),
       error: canSend ? undefined : explainDenial(roles),
     };
   } catch (err) {

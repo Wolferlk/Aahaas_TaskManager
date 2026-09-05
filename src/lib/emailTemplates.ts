@@ -383,3 +383,57 @@ export function testEmail(triggeredByName: string): { subject: string; html: str
       </td></tr>`;
   return { subject: 'Aahaas Task Management — test email', html: shell('Test email', 'Graph delivery works', inner) };
 }
+
+export interface PasswordResetMailInput {
+  name: string;
+  resetUrl: string;
+  /** Minutes the link stays valid — stated plainly so nobody sits on it. */
+  expiresInMinutes: number;
+  requestedFromIp?: string | null;
+}
+
+/**
+ * The reset link itself.
+ *
+ * The URL appears twice on purpose: once as the button, once as plain text,
+ * because Outlook rules and mobile clients routinely strip or rewrite the
+ * anchor and a person left with a dead button has no way forward.
+ */
+export function passwordResetEmail(input: PasswordResetMailInput): { subject: string; html: string } {
+  const inner = `
+      <tr><td style="padding:26px 28px 6px;">
+        <div style="font-size:12px;color:${MUTED};text-transform:uppercase;letter-spacing:.6px;font-weight:600;">Account security</div>
+        <h1 style="margin:6px 0 10px;font-size:20px;font-weight:700;color:${INK};line-height:1.3;">Reset your password</h1>
+        <p style="margin:0 0 14px;font-size:13.5px;color:${INK};line-height:1.7;">
+          Hi ${esc(input.name)}, we received a request to reset the password on your Aahaas
+          Task Management account. Choose a new one using the button below.
+        </p>
+        <a href="${esc(input.resetUrl)}"
+           style="display:inline-block;background:${BRAND};color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;padding:12px 24px;border-radius:10px;">
+          Choose a new password
+        </a>
+        <p style="margin:16px 0 6px;font-size:12px;color:${MUTED};line-height:1.6;">
+          If the button does not work, copy this link into your browser:
+        </p>
+        <p style="margin:0 0 16px;font-size:12px;line-height:1.6;word-break:break-all;">
+          <a href="${esc(input.resetUrl)}" style="color:${BRAND};text-decoration:none;">${esc(input.resetUrl)}</a>
+        </p>
+      </td></tr>
+      <tr><td style="padding:0 28px 24px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;">
+          <tr><td style="padding:12px 15px;">
+            <div style="font-size:12.5px;color:#92400e;line-height:1.6;">
+              This link expires in ${input.expiresInMinutes} minutes and can be used once.
+              If you did not ask for a reset you can ignore this email — your password stays as it is${
+                input.requestedFromIp ? `. The request came from ${esc(input.requestedFromIp)}` : ''
+              }.
+            </div>
+          </td></tr>
+        </table>
+      </td></tr>`;
+
+  return {
+    subject: 'Reset your Aahaas Task Management password',
+    html: shell('Reset your password', 'Your password reset link is inside — valid for a short time.', inner),
+  };
+}

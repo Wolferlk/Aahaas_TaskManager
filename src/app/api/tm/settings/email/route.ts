@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { execute, query, queryOne } from '@/lib/db';
 import { audit, badRequest, parseBody, requirePermission, requireUser, searchParams, toErrorResponse } from '@/lib/api';
 import { graphConfigured, sendMail, verifyGraph } from '@/lib/graphMail';
+import { DAILY_MAIL_DEFAULTS, DAILY_MAIL_SETTING_KEY, getDailyMailConfig } from '@/lib/dailyMail';
 import { testEmail } from '@/lib/emailTemplates';
 
 const SCOPES = ['DAILY_UPDATE', 'WEEKLY_SUMMARY', 'APPROVAL', 'TASK_ALERT'] as const;
@@ -20,14 +21,11 @@ export async function GET(req: Request) {
           WHERE r.scope = ? ORDER BY FIELD(r.mode,'TO','CC','BCC'), r.display_name, r.email`,
         [scope],
       ),
-      queryOne<{ value: unknown }>('SELECT value FROM tm_settings WHERE setting_key = ?', ['daily_update_email']),
+      getDailyMailConfig(),
       user.role === 'MANAGER'
         ? query('SELECT * FROM tm_email_log ORDER BY created_at DESC LIMIT 20')
         : Promise.resolve([]),
     ]);
-
-    const raw = config?.value;
-    const parsed = (typeof raw === 'string' ? JSON.parse(raw) : raw) as Record<string, unknown> | null;
 
     // Managers see the live permission state so a misconfigured Azure app is
     // obvious before anyone tries to send.
@@ -35,14 +33,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       recipients,
-      config: {
-        enabled: true,
-        include_items: true,
-        notify_leader: true,
-        greeting: 'Dear Sir,',
-        sign_off: 'Best regards,',
-        ...(parsed ?? {}),
-      },
+      config,
       graph_configured: graphConfigured(),
       graph,
       recent: log,
@@ -100,6 +91,8 @@ const configSchema = z.object({
   enabled: z.boolean().optional(),
   include_items: z.boolean().optional(),
   notify_leader: z.boolean().optional(),
+  // Copy each author on their own Daily Update.
+  copy_author: z.boolean().optional(),
   // Salutation and sign-off of the letter the daily update mail opens with.
   greeting: z.string().trim().max(120).optional(),
   sign_off: z.string().trim().max(120).optional(),
@@ -110,26 +103,14 @@ export async function PATCH(req: Request) {
     const user = await requirePermission('tm.settings.manage');
     const body = await parseBody(req, configSchema);
 
-    const existing = await queryOne<{ value: unknown }>('SELECT value FROM tm_settings WHERE setting_key = ?', [
-      'daily_update_email',
-    ]);
-    const raw = existing?.value;
-    const current = (typeof raw === 'string' ? JSON.parse(raw) : raw) ?? {};
-    const merged = {
-      enabled: true,
-      include_items: true,
-      notify_leader: true,
-      greeting: 'Dear Sir,',
-      sign_off: 'Best regards,',
-      ...current,
-      ...body,
-    };
+    const current = await getDailyMailConfig();
+    const merged = { ...DAILY_MAIL_DEFAULTS, ...current, ...body };
 
     await execute(
       `INSERT INTO tm_settings (setting_key, value, description, updated_by)
-       VALUES ('daily_update_email', CAST(? AS JSON), 'Daily Update email delivery settings', ?)
+       VALUES (?, CAST(? AS JSON), 'Daily Update email delivery settings', ?)
        ON DUPLICATE KEY UPDATE value = VALUES(value), updated_by = VALUES(updated_by)`,
-      [JSON.stringify(merged), user.id],
+      [DAILY_MAIL_SETTING_KEY, JSON.stringify(merged), user.id],
     );
     await audit(user.id, 'EMAIL_SETTINGS_CHANGED', 'SETTING', null, current, merged);
 

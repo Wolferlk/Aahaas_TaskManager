@@ -11,7 +11,8 @@ import { EmptyState, Skeleton, Divider } from '@/components/ui/Misc';
 import { StatusBadge } from '@/components/ui/Badge';
 import { fmtDate } from '@/lib/format';
 import { useSession } from '@/hooks/useSession';
-import { History, ChevronDown, ChevronRight, Bot, GitCommit } from 'lucide-react';
+import { History, ChevronDown, ChevronRight, Bot, GitCommit, Users, UserRound, Building2 } from 'lucide-react';
+import { cn } from '@/lib/cn';
 
 interface UpdateItem {
   id: number;
@@ -32,6 +33,15 @@ interface UpdateItem {
   commit_count: number | null;
   additions: number | null;
   deletions: number | null;
+}
+
+interface Person {
+  id: number;
+  full_name: string;
+  email: string;
+  avatar_url: string | null;
+  role: string;
+  team_name: string | null;
 }
 
 interface UpdateRow {
@@ -76,37 +86,111 @@ function Section({ title, body }: { title: string; body: string | null }) {
   );
 }
 
+/**
+ * Reading other people's days.
+ *
+ * The switch offered here mirrors what the API will actually allow: an
+ * Employee only ever sees themselves, a Leader adds the teams they lead, and a
+ * Manager adds everyone. The server re-checks all of it — this only keeps the
+ * UI from offering a view that would come back refused.
+ */
 export default function DailyUpdateHistoryPage() {
   const { user } = useSession();
-  const [scope, setScope] = useState(user?.role === 'EMPLOYEE' ? 'mine' : 'team');
+  const [scope, setScope] = useState<'mine' | 'team'>('mine');
+  const [person, setPerson] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
   const params = new URLSearchParams({
-    ...(scope === 'team' ? { scope: 'team' } : {}),
+    ...(person ? { user_id: person } : { scope }),
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
     limit: '60',
   });
 
-  const { data, isLoading } = useSWR<{ updates: UpdateRow[]; items: UpdateItem[] }>(`/api/tm/daily-updates?${params}`, fetcher);
+  const { data, isLoading } = useSWR<{
+    updates: UpdateRow[];
+    items: UpdateItem[];
+    people: Person[];
+    scope: { breadth: 'SELF' | 'TEAM' | 'ALL'; can_view_others: boolean };
+  }>(`/api/tm/daily-updates?${params}`, fetcher);
+
+  const canViewOthers = data?.scope?.can_view_others ?? false;
+  const isManager = user?.role === 'MANAGER';
+  const people = data?.people ?? [];
 
   return (
     <>
-      <PageHeader title="Daily Update History" subtitle="A timeline of recorded work" />
+      <PageHeader
+        title="Daily Update History"
+        subtitle={
+          isManager
+            ? 'Every recorded day, across the company'
+            : canViewOthers
+              ? 'Your days, and everyone in the teams you lead'
+              : 'A timeline of your recorded work'
+        }
+      />
       <PageBody className="space-y-4">
-        <Card>
+        <Card className="animate-pop-in">
           <CardContent className="flex flex-wrap items-end gap-3 p-4">
-            {user?.role !== 'EMPLOYEE' && (
+            {canViewOthers && (
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-muted">Scope</label>
-                <Select value={scope} onChange={(e) => setScope(e.target.value)} className="!h-9 !w-auto text-sm">
-                  <option value="mine">My updates</option>
-                  <option value="team">Team</option>
+                <label className="mb-1.5 block text-xs font-medium text-muted">Showing</label>
+                <div className="flex rounded-xl border border-line bg-surface p-0.5">
+                  {(
+                    [
+                      { id: 'mine', label: 'Just me', icon: UserRound },
+                      {
+                        id: 'team',
+                        label: isManager ? 'Everyone' : 'My team',
+                        icon: isManager ? Building2 : Users,
+                      },
+                    ] as const
+                  ).map((opt) => {
+                    const Icon = opt.icon;
+                    const active = !person && scope === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        onClick={() => {
+                          setPerson('');
+                          setScope(opt.id);
+                        }}
+                        className={cn(
+                          'focus-ring flex h-8 items-center gap-1.5 rounded-[10px] px-3 text-xs font-medium transition-colors',
+                          active ? 'bg-brand-soft text-brand' : 'text-muted hover:text-ink',
+                        )}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {canViewOthers && people.length > 0 && (
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-muted">One person</label>
+                <Select
+                  value={person}
+                  onChange={(e) => setPerson(e.target.value)}
+                  className="!h-9 !w-auto text-sm"
+                >
+                  <option value="">Anyone in view</option>
+                  {people.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.full_name}
+                      {p.team_name ? ` — ${p.team_name}` : ''}
+                    </option>
+                  ))}
                 </Select>
               </div>
             )}
+
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted">From</label>
               <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="!h-9 text-sm" />
@@ -115,20 +199,32 @@ export default function DailyUpdateHistoryPage() {
               <label className="mb-1.5 block text-xs font-medium text-muted">To</label>
               <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="!h-9 text-sm" />
             </div>
+            {(from || to || person) && (
+              <button
+                onClick={() => {
+                  setFrom('');
+                  setTo('');
+                  setPerson('');
+                }}
+                className="focus-ring h-9 rounded-lg px-2.5 text-xs font-medium text-brand hover:bg-brand-soft"
+              >
+                Clear
+              </button>
+            )}
           </CardContent>
         </Card>
 
         {isLoading && <Skeleton className="h-96" />}
         {data && data.updates.length === 0 && <EmptyState icon={History} title="No updates in this range" />}
 
-        <div className="relative space-y-0 pl-6">
+        <div className="stagger relative space-y-0 pl-6">
           {data?.updates.map((u, i) => {
             const items = data.items.filter((it) => it.daily_update_id === u.id);
             return (
               <div key={u.id} className="relative pb-6">
                 {i < data.updates.length - 1 && <div className="absolute -left-[19px] top-8 h-full w-px bg-line" />}
                 <div className="absolute -left-[23px] top-1.5 h-2.5 w-2.5 rounded-full bg-brand ring-4 ring-brand-soft" />
-                <Card>
+                <Card className="lift">
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2.5">
                       <Avatar name={u.full_name} src={u.avatar_url} size="sm" />

@@ -2,67 +2,70 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { forbidden, intParam, parseBody, requireUser, searchParams, toErrorResponse } from '@/lib/api';
 import { dailyUpdateSchema } from '@/lib/validation';
-import { ledTeamIds } from '@/lib/tasks';
-import { saveDailyUpdate } from '@/lib/dailyUpdates';
+import { dailyUpdateScope, saveDailyUpdate } from '@/lib/dailyUpdates';
 
+/**
+ * Reading Daily Updates.
+ *
+ * Visibility is resolved once by `dailyUpdateScope` and applied as an id list,
+ * so an Employee sees only their own days, a Leader sees theirs plus everyone
+ * in the teams they lead, and a Manager sees everybody. `scope=mine` narrows
+ * that to the reader themselves; `user_id` narrows it to one person, and is
+ * refused when that person is outside the reader's scope.
+ */
 export async function GET(req: Request) {
   try {
     const user = await requireUser();
     const sp = searchParams(req);
+    const scope = await dailyUpdateScope(user);
 
     const where: string[] = [];
     const params: unknown[] = [];
 
-    // Scope: everyone sees their own; Leaders their team's; Managers all.
     const target = sp.get('user_id');
-    if (target && Number(target) !== user.id) {
-      if (user.role === 'MANAGER') {
-        where.push('d.user_id = ?');
-        params.push(Number(target));
-      } else if (user.role === 'LEADER') {
-        const teams = await ledTeamIds(user.id);
-        if (!teams.length) throw forbidden('You do not lead a team yet.');
-        where.push('d.user_id = ? AND u.team_id IN (?)');
-        params.push(Number(target), teams);
-      } else {
-        throw forbidden('You can only view your own daily updates.');
+    const wants = sp.get('scope') ?? 'mine';
+
+    if (target) {
+      const id = Number(target);
+      if (!Number.isFinite(id)) throw forbidden('That is not a person.');
+      if (id !== user.id && (scope.userIds !== null && !scope.userIds.includes(id))) {
+        throw forbidden(
+          user.role === 'EMPLOYEE'
+            ? 'You can only view your own daily updates.'
+            : 'That person is not in a team you lead.',
+        );
       }
-    } else if (sp.get('scope') === 'team' && user.role !== 'EMPLOYEE') {
-      if (user.role === 'MANAGER') {
-        where.push('1 = 1');
-      } else {
-        const teams = await ledTeamIds(user.id);
-        if (!teams.length) throw forbidden('You do not lead a team yet.');
-        where.push('u.team_id IN (?)');
-        params.push(teams);
-      }
-    } else {
+      where.push('d.user_id = ?');
+      params.push(id);
+    } else if (wants === 'mine' || !scope.canViewOthers) {
       where.push('d.user_id = ?');
       params.push(user.id);
+    } else if (scope.userIds === null) {
+      // Manager, whole company.
+      where.push('1 = 1');
+    } else {
+      where.push('d.user_id IN (?)');
+      params.push(scope.userIds);
     }
 
-    const from = sp.get('from');
-    if (from) {
-      where.push('d.update_date >= ?');
-      params.push(from);
-    }
-    const to = sp.get('to');
-    if (to) {
-      where.push('d.update_date <= ?');
-      params.push(to);
-    }
-    const date = sp.get('date');
-    if (date) {
-      where.push('d.update_date = ?');
-      params.push(date);
+    for (const [key, sql] of [
+      ['from', 'd.update_date >= ?'],
+      ['to', 'd.update_date <= ?'],
+      ['date', 'd.update_date = ?'],
+    ] as const) {
+      const value = sp.get(key);
+      if (value) {
+        where.push(sql);
+        params.push(value);
+      }
     }
 
-    const limit = intParam(sp, 'limit', 30, 120);
+    const limit = intParam(sp, 'limit', 30, 200);
 
     // The long-form detail rides along with each update, so a reader never has
     // to fetch a second endpoint to see what the day actually contained.
     const updates = await query<{ id: number }>(
-      `SELECT d.*, u.full_name, u.avatar_url, u.job_title,
+      `SELECT d.*, u.full_name, u.avatar_url, u.job_title, u.role AS author_role,
               t.name AS team_name, dep.name AS department_name,
               (SELECT COUNT(*) FROM tm_daily_update_items i WHERE i.daily_update_id = d.id) AS item_count,
               dd.detailed_summary, dd.highlights, dd.achievements, dd.challenges, dd.learnings,
@@ -95,7 +98,26 @@ export async function GET(req: Request) {
         )
       : [];
 
-    return NextResponse.json({ updates, items });
+    // The people this reader may filter by — the picker never offers someone
+    // the API would then refuse.
+    const people = scope.canViewOthers
+      ? await query(
+          `SELECT u.id, u.full_name, u.email, u.avatar_url, u.role, u.job_title, t.name AS team_name
+             FROM tm_users u
+             LEFT JOIN tm_teams t ON t.id = u.team_id
+            WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE'
+              ${scope.userIds === null ? '' : 'AND u.id IN (?)'}
+            ORDER BY u.full_name`,
+          scope.userIds === null ? [] : [scope.userIds],
+        )
+      : [];
+
+    return NextResponse.json({
+      updates,
+      items,
+      people,
+      scope: { breadth: scope.breadth, can_view_others: scope.canViewOthers },
+    });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -106,7 +128,7 @@ export async function GET(req: Request) {
  *
  * The payload is what the user confirmed on the review screen — AI output is
  * never written straight through. The write itself lives in `saveDailyUpdate`
- * so the unattended 22:00 sweep files an identical record.
+ * so the unattended cut-off sweep files an identical record.
  */
 export async function POST(req: Request) {
   try {

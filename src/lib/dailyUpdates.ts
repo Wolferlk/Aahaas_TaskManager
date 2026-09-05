@@ -1,11 +1,12 @@
 import 'server-only';
 import { z } from 'zod';
-import { execute, query, queryOne, transaction } from './db';
+import { execute, query, transaction } from './db';
 import { audit } from './api';
 import { dailyUpdateSchema } from './validation';
-import { logActivity, nextTaskNumber } from './tasks';
+import { logActivity, nextTaskNumber, teamMemberIds } from './tasks';
 import { AI_MODEL, detailedDaySummary, type DaySummaryItem } from './ai';
 import { graphConfigured, sendMail } from './graphMail';
+import { resolveDailyUpdateRecipients } from './dailyMail';
 import { dailyUpdateEmail } from './emailTemplates';
 import type { SessionUser } from './types';
 
@@ -55,6 +56,44 @@ export interface SaveResult {
   message: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * Who may read whose Daily Update
+ *
+ * One rule, resolved once and used by every read path:
+ *   EMPLOYEE — their own days, and nothing else.
+ *   LEADER   — their own days plus every active member of the teams they
+ *              lead. A Leader who leads no team still sees themselves.
+ *   MANAGER  — everybody.
+ * ------------------------------------------------------------------ */
+
+export interface DailyScope {
+  /** The user ids in view. `null` means "no restriction" (Manager). */
+  userIds: number[] | null;
+  /** Whether this person can see anyone other than themselves at all. */
+  canViewOthers: boolean;
+  /** What the widest scope is called on screen. */
+  breadth: 'SELF' | 'TEAM' | 'ALL';
+}
+
+export async function dailyUpdateScope(user: SessionUser): Promise<DailyScope> {
+  if (user.role === 'MANAGER') return { userIds: null, canViewOthers: true, breadth: 'ALL' };
+
+  if (user.role === 'LEADER') {
+    const members = await teamMemberIds(user.id);
+    const ids = [...new Set([user.id, ...members])];
+    return { userIds: ids, canViewOthers: ids.length > 1, breadth: 'TEAM' };
+  }
+
+  return { userIds: [user.id], canViewOthers: false, breadth: 'SELF' };
+}
+
+/** Whether `user` may read `targetId`'s Daily Updates. */
+export async function canViewDailyUpdatesOf(user: SessionUser, targetId: number): Promise<boolean> {
+  if (targetId === user.id) return true;
+  const scope = await dailyUpdateScope(user);
+  return scope.userIds === null || scope.userIds.includes(targetId);
+}
+
 const blank = (v: unknown): boolean => v === null || v === undefined || String(v).trim() === '';
 
 /** AI bullet lists are stored as plain lines so they read the same everywhere. */
@@ -67,9 +106,10 @@ const preferUser = (userValue: unknown, aiValue: string | null): string | null =
 /**
  * Sends the Daily Update mail through Microsoft Graph.
  *
- * Resolves recipients from tm_email_recipients, optionally adding the author's
- * team Leader. Any failure is swallowed into the return value so the caller's
- * save is never affected.
+ * Addressing is delegated to `resolveDailyUpdateRecipients`, so the author's
+ * own routing rules, the global list and the automatic copies are applied in
+ * one place. Any failure is swallowed into the return value: the save has
+ * already happened and must never be undone by a mail problem.
  */
 async function deliverDailyUpdateMail(ctx: {
   user: SessionUser;
@@ -96,42 +136,17 @@ async function deliverDailyUpdateMail(ctx: {
   }>;
 }): Promise<{ attempted: boolean; sent?: boolean; recipients?: number; error?: string }> {
   try {
-    if (!graphConfigured()) return { attempted: false };
-
-    const configRow = await queryOne<{ value: unknown }>('SELECT value FROM tm_settings WHERE setting_key = ?', [
-      'daily_update_email',
-    ]);
-    const raw = configRow?.value;
-    const config = ((typeof raw === 'string' ? JSON.parse(raw) : raw) ?? {}) as {
-      enabled?: boolean;
-      notify_leader?: boolean;
-      greeting?: string | null;
-      sign_off?: string | null;
-    };
-    if (config.enabled === false) return { attempted: false };
-
-    const rows = await query<{ email: string; display_name: string | null; mode: string }>(
-      `SELECT email, display_name, mode FROM tm_email_recipients
-        WHERE scope = 'DAILY_UPDATE' AND is_active = 1`,
-    );
-
-    const to = rows.filter((r) => r.mode === 'TO').map((r) => ({ email: r.email, name: r.display_name }));
-    const cc = rows.filter((r) => r.mode === 'CC').map((r) => ({ email: r.email, name: r.display_name }));
-    const bcc = rows.filter((r) => r.mode === 'BCC').map((r) => ({ email: r.email, name: r.display_name }));
-
-    if (config.notify_leader !== false && ctx.user.team_id) {
-      const leader = await queryOne<{ email: string; full_name: string }>(
-        `SELECT u.email, u.full_name FROM tm_teams t
-           JOIN tm_users u ON u.id = t.leader_user_id
-          WHERE t.id = ? AND u.status = 'ACTIVE' AND u.deleted_at IS NULL`,
-        [ctx.user.team_id],
-      );
-      if (leader && !to.some((r) => r.email === leader.email) && leader.email !== ctx.user.email) {
-        cc.push({ email: leader.email, name: leader.full_name });
-      }
+    if (!graphConfigured()) {
+      return { attempted: false, error: 'Microsoft Graph is not configured.' };
     }
 
-    if (!to.length && !cc.length) return { attempted: false };
+    const routing = await resolveDailyUpdateRecipients({
+      id: ctx.user.id,
+      email: ctx.user.email,
+      full_name: ctx.user.full_name,
+      team_id: ctx.user.team_id,
+    });
+    if (!routing.willSend) return { attempted: false, error: routing.reason };
 
     // Project names for the mail body, resolved in one lookup.
     const projectIds = [...new Set(ctx.items.map((i) => i.project_id).filter((v): v is number => !!v))];
@@ -154,8 +169,8 @@ async function deliverDailyUpdateMail(ctx: {
       nextDayPlan: ctx.nextDayPlan,
       totalHours: ctx.totalHours,
       githubCommits: ctx.githubCommits,
-      greeting: config.greeting ?? null,
-      signOff: config.sign_off ?? null,
+      greeting: routing.config.greeting,
+      signOff: routing.config.sign_off,
       items: ctx.items.map((i) => ({
         title: i.title,
         topic: i.topic ?? null,
@@ -174,9 +189,9 @@ async function deliverDailyUpdateMail(ctx: {
     const result = await sendMail({
       subject,
       html,
-      to: to.length ? to : cc,
-      cc: to.length ? cc : [],
-      bcc,
+      to: routing.to,
+      cc: routing.cc,
+      bcc: routing.bcc,
       replyTo: [{ email: ctx.user.email, name: ctx.user.full_name }],
       scope: 'DAILY_UPDATE',
       entityType: 'DAILY_UPDATE',
@@ -187,7 +202,7 @@ async function deliverDailyUpdateMail(ctx: {
     return {
       attempted: true,
       sent: result.ok,
-      recipients: to.length + cc.length + bcc.length,
+      recipients: routing.to.length + routing.cc.length + routing.bcc.length,
       error: result.error,
     };
   } catch (err) {
