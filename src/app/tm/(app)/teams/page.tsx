@@ -127,16 +127,27 @@ function TeamFormModal({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Temporary: teams can only be created under the IT department.
+  const itDepartment = departments.find(
+    (d) => d.code?.toUpperCase() === 'IT' || d.name.trim().toUpperCase() === 'IT',
+  );
+  // Editing an existing team outside IT keeps showing its own department.
+  const lockedDepartment = isEdit
+    ? departments.find((d) => d.id === team!.department_id) ?? itDepartment
+    : itDepartment;
+
   useEffect(() => {
     if (!open) return;
     setError(null);
     setName(team?.name ?? '');
     setCode(team?.code ?? '');
-    setDepartmentId(team?.department_id ? String(team.department_id) : '');
+    setDepartmentId(
+      team?.department_id ? String(team.department_id) : itDepartment ? String(itDepartment.id) : '',
+    );
     setLeaderId(team?.leader_user_id ? String(team.leader_user_id) : '');
     setDescription(team?.description ?? '');
     setStatus(team?.status ?? 'ACTIVE');
-  }, [open, team]);
+  }, [open, team, itDepartment]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -188,9 +199,12 @@ function TeamFormModal({
         </div>
         <div>
           <Label htmlFor="t-dept">Department</Label>
-          <Select id="t-dept" required value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
-            <option value="">Select department</option>
-            {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          <Select id="t-dept" required disabled value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
+            {lockedDepartment ? (
+              <option value={lockedDepartment.id}>{lockedDepartment.name}</option>
+            ) : (
+              <option value="">Select department</option>
+            )}
           </Select>
         </div>
         <div className="grid grid-cols-2 gap-3">
