@@ -31,7 +31,16 @@ export default function SignupPage() {
   const [pending, setPending] = useState(false);
   const [done, setDone] = useState(false);
 
+  // Temporary: only the IT department can be selected during signup.
+  const itDepartment = (meta?.departments ?? []).find(
+    (d) => d.code?.toUpperCase() === 'IT' || d.name.trim().toUpperCase() === 'IT',
+  );
+
   useEffect(() => setTeamId(''), [departmentId]);
+
+  useEffect(() => {
+    if (itDepartment) setDepartmentId(String(itDepartment.id));
+  }, [itDepartment]);
 
   const teamsForDept = (meta?.teams ?? []).filter((t) => String(t.department_id) === departmentId);
 
@@ -110,11 +119,12 @@ export default function SignupPage() {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label htmlFor="dept">Department</Label>
-              <Select id="dept" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
-                <option value="">Select department</option>
-                {meta?.departments.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
+              <Select id="dept" value={departmentId} disabled onChange={(e) => setDepartmentId(e.target.value)}>
+                {itDepartment ? (
+                  <option value={itDepartment.id}>{itDepartment.name}</option>
+                ) : (
+                  <option value="">Select department</option>
+                )}
               </Select>
             </div>
             <div>
