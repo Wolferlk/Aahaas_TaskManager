@@ -61,7 +61,11 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'Enter your password.'),
 });
 
-export const forgotSchema = z.object({ email });
+/** Resetting a password needs the account's address plus the emergency code. */
+export const forgotSchema = z.object({
+  email,
+  code: z.string().min(1, 'Enter the emergency code.').max(100),
+});
 
 export const resetSchema = z
   .object({ token: z.string().min(10), password, confirm_password: z.string() })

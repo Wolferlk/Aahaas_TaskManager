@@ -16,7 +16,10 @@ export async function POST(req: Request) {
       [sha256(body.token)],
     );
     if (!row) {
-      return NextResponse.json({ error: 'This reset link is invalid or has expired.' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'This reset token is invalid or has expired. Enter the emergency code again.' },
+        { status: 400 },
+      );
     }
 
     // An account that a Manager has not approved (or has since disabled) has no

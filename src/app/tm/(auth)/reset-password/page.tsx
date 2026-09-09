@@ -68,13 +68,13 @@ function ResetForm() {
           <div className="mx-auto flex h-16 w-16 animate-bounce-in items-center justify-center rounded-3xl bg-amber-500/10">
             <ShieldAlert className="h-8 w-8 text-amber-500" />
           </div>
-          <h1 className="mt-4 text-lg font-semibold text-ink">This link is incomplete</h1>
+          <h1 className="mt-4 text-lg font-semibold text-ink">This page needs a reset token</h1>
           <p className="mt-2 text-sm text-muted">
-            It is missing its token, which usually means the address was cut short when it was copied. Ask for a
-            fresh link and open it straight from the email.
+            Reset tokens are issued once you enter your email and the emergency code, and they expire after a
+            short while. Start again to get a fresh one.
           </p>
           <Link href="/tm/forgot-password">
-            <Button className="mt-6 w-full">Request a new link</Button>
+            <Button className="mt-6 w-full">Enter the emergency code</Button>
           </Link>
         </CardContent>
       </Card>
