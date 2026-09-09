@@ -8,13 +8,31 @@ export async function POST(req: Request) {
   try {
     const body = await parseBody(req, resetSchema);
 
-    const row = await queryOne<{ id: number; user_id: number }>(
-      `SELECT id, user_id FROM tm_password_resets
-        WHERE token_hash = ? AND used_at IS NULL AND expires_at > NOW() LIMIT 1`,
+    const row = await queryOne<{ id: number; user_id: number; status: string }>(
+      `SELECT r.id, r.user_id, u.status
+         FROM tm_password_resets r
+         JOIN tm_users u ON u.id = r.user_id AND u.deleted_at IS NULL
+        WHERE r.token_hash = ? AND r.used_at IS NULL AND r.expires_at > NOW() LIMIT 1`,
       [sha256(body.token)],
     );
     if (!row) {
       return NextResponse.json({ error: 'This reset link is invalid or has expired.' }, { status: 400 });
+    }
+
+    // An account that a Manager has not approved (or has since disabled) has no
+    // password to change yet. The token is burned so it cannot be retried.
+    if (row.status !== 'ACTIVE') {
+      await execute('UPDATE tm_password_resets SET used_at = NOW() WHERE id = ?', [row.id]);
+      await audit(row.user_id, 'PASSWORD_RESET_BLOCKED', 'USER', row.user_id, row.status, null);
+      return NextResponse.json(
+        {
+          error:
+            row.status === 'PENDING_APPROVAL'
+              ? 'Your account is still waiting for Manager approval, so its password cannot be changed yet.'
+              : 'This account is not active. Please contact your Manager.',
+        },
+        { status: 403 },
+      );
     }
 
     await execute('UPDATE tm_users SET password_hash = ?, must_change_password = 0 WHERE id = ?', [

@@ -1,3 +1,6 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import { cn } from '@/lib/cn';
 import { initials } from '@/lib/format';
 
@@ -23,6 +26,11 @@ export function Avatar({
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
 }) {
+  const [broken, setBroken] = useState(false);
+
+  // A new photo deserves a fresh attempt, even if the previous one failed.
+  useEffect(() => setBroken(false), [src]);
+
   const sizes = {
     xs: 'h-5 w-5 text-[9px]',
     sm: 'h-7 w-7 text-[11px]',
@@ -31,12 +39,16 @@ export function Avatar({
     xl: 'h-20 w-20 text-xl',
   };
 
-  if (src) {
+  // Uploaded avatars live outside the repo, so a photo recorded on one
+  // deployment can be missing on another. Falling back to initials keeps a
+  // stale avatar_url from rendering as a broken-image icon.
+  if (src && !broken) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
         src={src}
         alt={name ?? ''}
+        onError={() => setBroken(true)}
         className={cn('shrink-0 rounded-full object-cover ring-2 ring-surface', sizes[size], className)}
       />
     );

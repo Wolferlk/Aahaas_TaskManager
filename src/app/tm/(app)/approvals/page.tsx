@@ -24,6 +24,8 @@ interface Approval {
   requester_email: string | null;
   requested_role: string | null;
   job_title: string | null;
+  requester_department_id: number | null;
+  requester_team_id: number | null;
   department_name: string | null;
   team_name: string | null;
   reason: string | null;
@@ -92,7 +94,10 @@ export default function ApprovalsPage() {
                     <p className="mt-1 text-xs text-muted">
                       Requested <strong className="text-ink">{a.requested_role}</strong> access
                       {a.job_title ? ` · ${a.job_title}` : ''}
-                      {a.department_name ? ` · ${a.department_name}` : ''}
+                      {' · '}
+                      Department <strong className="text-ink">{a.department_name ?? 'not chosen'}</strong>
+                      {' · '}
+                      Team <strong className="text-ink">{a.team_name ?? 'not chosen'}</strong>
                     </p>
                   )}
                   {a.type === 'DEADLINE_EXTENSION' && (
@@ -140,13 +145,26 @@ function SignupDecision({
   onDecide,
 }: {
   approval: Approval;
-  departments: Array<{ id: number; name: string }>;
-  teams: Array<{ id: number; name: string; department_id: number }>;
+  departments: Array<{ id: number; name: string; status: string }>;
+  teams: Array<{ id: number; name: string; department_id: number; status: string }>;
   onDecide: (id: number, decision: 'APPROVED' | 'REJECTED', overrides?: Record<string, unknown>, comment?: string) => void;
 }) {
   const [role, setRole] = useState(approval.requested_role ?? 'EMPLOYEE');
-  const [departmentId, setDepartmentId] = useState('');
-  const [teamId, setTeamId] = useState('');
+  // The department and team the person picked at signup are pre-selected, so a
+  // Manager sees the choice rather than a blank "keep whatever it was" box.
+  const [departmentId, setDepartmentId] = useState(
+    approval.requester_department_id ? String(approval.requester_department_id) : '',
+  );
+  const [teamId, setTeamId] = useState(approval.requester_team_id ? String(approval.requester_team_id) : '');
+
+  const selectableDepartments = departments.filter(
+    (d) => d.status !== 'DISABLED' || String(d.id) === departmentId,
+  );
+  const selectableTeams = teams.filter(
+    (t) =>
+      (t.status !== 'DISABLED' || String(t.id) === teamId) &&
+      (!departmentId || String(t.department_id) === departmentId),
+  );
 
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -155,13 +173,26 @@ function SignupDecision({
         <option value="LEADER">Leader</option>
         <option value="MANAGER">Manager</option>
       </Select>
-      <Select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} className="!h-8 !w-auto text-xs">
-        <option value="">Keep department</option>
-        {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+      <Select
+        aria-label="Department"
+        value={departmentId}
+        onChange={(e) => {
+          setDepartmentId(e.target.value);
+          setTeamId('');
+        }}
+        className="!h-8 !w-auto text-xs"
+      >
+        <option value="">No department</option>
+        {selectableDepartments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
       </Select>
-      <Select value={teamId} onChange={(e) => setTeamId(e.target.value)} className="!h-8 !w-auto text-xs">
-        <option value="">Keep team</option>
-        {teams.filter((t) => !departmentId || String(t.department_id) === departmentId).map((t) => (
+      <Select
+        aria-label="Team"
+        value={teamId}
+        onChange={(e) => setTeamId(e.target.value)}
+        className="!h-8 !w-auto text-xs"
+      >
+        <option value="">No team</option>
+        {selectableTeams.map((t) => (
           <option key={t.id} value={t.id}>{t.name}</option>
         ))}
       </Select>
@@ -170,8 +201,8 @@ function SignupDecision({
         onClick={() =>
           onDecide(approval.id, 'APPROVED', {
             role,
-            department_id: departmentId ? Number(departmentId) : undefined,
-            team_id: teamId ? Number(teamId) : undefined,
+            department_id: departmentId ? Number(departmentId) : null,
+            team_id: teamId ? Number(teamId) : null,
           })
         }
       >

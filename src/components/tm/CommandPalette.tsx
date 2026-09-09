@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
-import { Search, ArrowRight, Hash, User, FolderKanban, MessageSquare } from 'lucide-react';
+import { Search, ArrowRight, Hash, User, FolderKanban, MessageSquare, X } from 'lucide-react';
 import { fetcher } from '@/lib/client';
 import { Modal } from '@/components/ui/Overlay';
 import { StatusBadge } from '@/components/ui/Badge';
@@ -62,13 +62,26 @@ export function CommandPalette({
     <Modal open={open} onClose={onClose} className="max-w-xl overflow-hidden p-0" title="Command palette">
       <div className="flex items-center gap-3 border-b border-line px-4 py-3.5">
         <Search className="h-4 w-4 shrink-0 text-faint" />
+        {/* min-w-0 lets the box shrink; without it a long query pushed the
+            shortcut hint off the edge of the panel. */}
         <input
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search tasks, people, projects... or type TM-2026-000124"
-          className="w-full bg-transparent text-sm text-ink placeholder:text-faint focus:outline-none"
+          className="min-w-0 flex-1 truncate bg-transparent text-sm text-ink placeholder:text-faint focus:outline-none"
         />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery('')}
+            className="focus-ring shrink-0 rounded-full p-1 text-faint transition-colors hover:bg-line/40 hover:text-ink"
+            aria-label="Clear search"
+            title="Clear search"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
         <kbd className="hidden shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-faint sm:block">esc</kbd>
       </div>
 
@@ -176,7 +189,11 @@ export function CommandPalette({
           !data.tasks.length &&
           !data.people.length &&
           !data.projects.length &&
-          !data.comments.length && <p className="px-3 py-6 text-center text-sm text-muted">No results for &ldquo;{query}&rdquo;.</p>}
+          !data.comments.length && (
+            <p className="break-words px-3 py-6 text-center text-sm text-muted">
+              No results for &ldquo;<span className="font-medium text-ink">{query.length > 60 ? `${query.slice(0, 60)}…` : query}</span>&rdquo;.
+            </p>
+          )}
       </div>
     </Modal>
   );

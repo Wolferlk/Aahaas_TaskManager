@@ -42,6 +42,40 @@ export async function notifyMany(userIds: Array<number | null | undefined>, inpu
   await Promise.all(unique.map((userId) => notify({ ...input, userId })));
 }
 
+/**
+ * Everyone who should hear about a change to one task: the person who raised
+ * it, the leader of its team, and the manager of its department. Managers are
+ * included as a fallback so an update on a task with no team or department
+ * still reaches the portal rather than disappearing.
+ */
+export async function taskStakeholderIds(task: {
+  created_by: number | null;
+  team_id: number | null;
+  department_id: number | null;
+}): Promise<number[]> {
+  const ids: Array<number | null | undefined> = [task.created_by];
+
+  if (task.team_id) {
+    const rows = await query<{ leader_user_id: number | null }>(
+      'SELECT leader_user_id FROM tm_teams WHERE id = ? AND deleted_at IS NULL',
+      [task.team_id],
+    );
+    ids.push(rows[0]?.leader_user_id);
+  }
+
+  if (task.department_id) {
+    const rows = await query<{ manager_user_id: number | null }>(
+      'SELECT manager_user_id FROM tm_departments WHERE id = ? AND deleted_at IS NULL',
+      [task.department_id],
+    );
+    ids.push(rows[0]?.manager_user_id);
+  }
+
+  if (!ids.some((id) => !!id)) ids.push(...(await managerIds()));
+
+  return [...new Set(ids.filter((id): id is number => !!id))];
+}
+
 /** Every Manager, used for signup approvals and escalations. */
 export async function managerIds(): Promise<number[]> {
   const rows = await query<{ id: number }>(

@@ -2,6 +2,33 @@ import { z } from 'zod';
 
 export const email = z.string().trim().toLowerCase().email('Enter a valid email address.').max(190);
 
+/**
+ * Names are letters plus the punctuation real names actually contain —
+ * apostrophes, hyphens, periods and spaces. Digits and symbols are rejected
+ * so "Test123" or "asdf@#$" never reaches the directory.
+ */
+export const personName = z
+  .string()
+  .trim()
+  .min(2, 'Enter your full name.')
+  .max(150)
+  .regex(/^[\p{L}][\p{L}\s'.-]*$/u, 'Use letters only — spaces, hyphens, apostrophes and periods are allowed.')
+  .refine((v) => /\p{L}{2}/u.test(v), 'Enter your full name.');
+
+/** Job titles allow digits (e.g. "Engineer II", "Level 3 Support") but no symbols. */
+export const jobTitle = z
+  .string()
+  .trim()
+  .max(120)
+  .regex(/^[\p{L}][\p{L}\p{N}\s'./&-]*$/u, 'Use letters, numbers, spaces and - . / & only.');
+
+/** E.164-ish: a leading country code and 6-15 digits. */
+export const phoneNumber = z
+  .string()
+  .trim()
+  .max(40)
+  .regex(/^\+[1-9]\d{0,3}[\s-]?\d{6,15}$/, 'Enter the number with its country code, e.g. +94 771234567.');
+
 export const password = z
   .string()
   .min(8, 'Password must be at least 8 characters.')
@@ -12,16 +39,16 @@ export const password = z
 
 export const signupSchema = z
   .object({
-    full_name: z.string().trim().min(2, 'Enter your full name.').max(150),
+    full_name: personName,
     email,
     password,
     confirm_password: z.string(),
     department_id: z.coerce.number().int().positive().nullable().optional(),
     team_id: z.coerce.number().int().positive().nullable().optional(),
     requested_role: z.enum(['LEADER', 'EMPLOYEE']),
-    job_title: z.string().trim().max(120).optional().nullable(),
+    job_title: jobTitle.optional().nullable(),
     employee_code: z.string().trim().max(60).optional().nullable(),
-    phone: z.string().trim().max(40).optional().nullable(),
+    phone: phoneNumber.optional().nullable(),
     avatar_url: z.string().trim().max(500).optional().nullable(),
   })
   .refine((v) => v.password === v.confirm_password, {
@@ -254,14 +281,15 @@ export const approvalDecisionSchema = z.object({
 });
 
 export const userUpdateSchema = z.object({
-  full_name: z.string().trim().min(2).max(150).optional(),
+  full_name: personName.optional(),
   role: z.enum(['MANAGER', 'LEADER', 'EMPLOYEE']).optional(),
   status: z.enum(['ACTIVE', 'DISABLED']).optional(),
   department_id: nullableId,
   team_id: nullableId,
-  job_title: z.string().max(120).nullable().optional(),
+  // An empty string clears the field; anything else must be well formed.
+  job_title: z.union([jobTitle, z.literal('')]).nullable().optional(),
   employee_code: z.string().max(60).nullable().optional(),
-  phone: z.string().max(40).nullable().optional(),
+  phone: z.union([phoneNumber, z.literal('')]).nullable().optional(),
   avatar_url: z.string().max(500).nullable().optional(),
   availability: z.enum(['AVAILABLE', 'BUSY', 'ON_LEAVE', 'REMOTE', 'OFFLINE']).optional(),
 });

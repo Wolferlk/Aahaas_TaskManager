@@ -141,7 +141,7 @@ function ProjectFormModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { departments, users } = useMeta();
+  const { activeDepartments, users } = useMeta();
   const toast = useToast();
   const isEdit = !!project;
 
@@ -231,7 +231,7 @@ function ProjectFormModal({
             <Label htmlFor="p-dept">Department</Label>
             <Select id="p-dept" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
               <option value="">—</option>
-              {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              {activeDepartments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </Select>
           </div>
           <div>

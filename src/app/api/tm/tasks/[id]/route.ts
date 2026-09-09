@@ -11,7 +11,8 @@ import {
   taskMemberScopeCheck,
   taskScope,
 } from '@/lib/tasks';
-import { notify } from '@/lib/notifications';
+import { notify, notifyMany, taskStakeholderIds } from '@/lib/notifications';
+import { STATUS_LABEL } from '@/lib/types';
 import type { TaskStatus } from '@/lib/types';
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -126,6 +127,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
       created_by: number;
       assignee_id: number | null;
       team_id: number | null;
+      department_id: number | null;
       status: TaskStatus;
       title: string;
       deadline: string | null;
@@ -256,6 +258,28 @@ export async function PATCH(req: Request, { params }: Ctx) {
           actorId: user.id,
         });
       }
+
+      // Every status move is reported upwards. Without this a Manager only
+      // ever heard about review requests, so day-to-day progress on team work
+      // never reached the portal at all.
+      const supervisors = (
+        await taskStakeholderIds({
+          created_by: before.created_by,
+          team_id: before.team_id,
+          department_id: before.department_id,
+        })
+      ).filter((uid) => uid !== user.id && uid !== before.created_by);
+
+      await notifyMany(supervisors, {
+        type: 'TASK_STATUS_UPDATED',
+        title: `${STATUS_LABEL[nextStatus] ?? nextStatus}: ${before.title}`,
+        body: `${user.full_name} moved this from ${STATUS_LABEL[before.status] ?? before.status}.`,
+        link: `/tm/tasks?task=${id}`,
+        entityType: 'TASK',
+        entityId: id,
+        actorId: user.id,
+        priority: nextStatus === 'BLOCKED' ? 'HIGH' : 'NORMAL',
+      });
     }
 
     if (changes.assignee_id && changes.assignee_id !== before.assignee_id) {

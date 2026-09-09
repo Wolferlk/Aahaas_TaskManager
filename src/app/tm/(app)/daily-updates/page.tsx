@@ -5,7 +5,7 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import {
   Plus, NotebookPen, ArrowRight, Flame, CalendarDays, CalendarPlus, Sparkles,
-  Users, Bot, PartyPopper, Clock3,
+  Users, Bot, PartyPopper, Clock3, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { fetcher } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
@@ -65,6 +65,16 @@ const DAY_STYLE: Record<CalendarDay['state'], string> = {
 export default function DailyUpdatesPage() {
   const { user } = useSession();
   const [scope, setScope] = useState<'mine' | 'team'>('mine');
+  // Update ids whose full item list is open.
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  const toggleExpanded = (id: number) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const { data, isLoading } = useSWR<{
     updates: UpdateRow[];
@@ -308,6 +318,8 @@ export default function DailyUpdatesPage() {
         <div className="stagger space-y-3">
           {data?.updates.map((u) => {
             const items = data.items.filter((i) => i.daily_update_id === u.id);
+            const expandedCard = expanded.has(u.id);
+            const shown = expandedCard ? items : items.slice(0, 6);
             return (
               <Card key={u.id} className="lift">
                 <CardContent className="p-5">
@@ -329,8 +341,8 @@ export default function DailyUpdatesPage() {
                     </span>
                   </div>
                   {u.summary && <p className="mt-1.5 text-sm text-muted">{u.summary}</p>}
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {items.slice(0, 6).map((it) => (
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                    {shown.map((it) => (
                       <span
                         key={it.id}
                         className="rounded-full bg-line/40 px-2.5 py-1 text-xs text-muted transition-colors hover:bg-brand-soft hover:text-brand"
@@ -338,8 +350,24 @@ export default function DailyUpdatesPage() {
                         {it.title}
                       </span>
                     ))}
+                    {/* "+7 more" used to be dead text; it now opens the rest. */}
                     {items.length > 6 && (
-                      <span className="px-1 py-1 text-xs text-faint">+{items.length - 6} more</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleExpanded(u.id)}
+                        className="focus-ring flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-brand hover:underline"
+                        aria-expanded={expandedCard}
+                      >
+                        {expandedCard ? (
+                          <>
+                            <ChevronUp className="h-3.5 w-3.5" /> Show less
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="h-3.5 w-3.5" /> +{items.length - 6} more
+                          </>
+                        )}
+                      </button>
                     )}
                   </div>
                 </CardContent>

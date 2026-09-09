@@ -1,13 +1,15 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard, ListChecks, Users, FolderKanban, CalendarClock, BarChart3,
-  Trophy, Bell, ShieldCheck, UserCircle, Settings, Building2, UsersRound,
-  ClipboardCheck, NotebookPen, ChevronLeft, ChevronRight,
+  Trophy, Bell, ShieldCheck, Settings, Building2, UsersRound,
+  ClipboardCheck, NotebookPen, ChevronLeft, ChevronRight, KanbanSquare, LogOut,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { apiPost } from '@/lib/client';
 import { useSession } from '@/hooks/useSession';
 import { Logo } from './Logo';
 import { Avatar } from '@/components/ui/Avatar';
@@ -25,6 +27,7 @@ const NAV: NavItem[] = [
   { href: '/tm/dashboard', label: 'Overview', icon: LayoutDashboard },
   { href: '/tm/tasks', label: 'My Tasks', icon: ListChecks, match: '/tm/tasks' },
   { href: '/tm/tasks/team', label: 'Team Tasks', icon: UsersRound, leaderPlus: true },
+  { href: '/tm/tasks/board', label: 'Board', icon: KanbanSquare },
   { href: '/tm/projects', label: 'Projects', icon: FolderKanban },
   { href: '/tm/daily-updates', label: 'Daily Updates', icon: NotebookPen },
   { href: '/tm/tasks/calendar', label: 'Calendar', icon: CalendarClock },
@@ -50,7 +53,20 @@ function isActive(pathname: string, item: NavItem) {
 
 export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const pathname = usePathname();
-  const { user, unreadNotifications } = useSession();
+  const router = useRouter();
+  const { user, unreadNotifications, refresh } = useSession();
+  const [signingOut, setSigningOut] = useState(false);
+
+  const signOut = async () => {
+    setSigningOut(true);
+    try {
+      await apiPost('/api/tm/auth/logout');
+    } finally {
+      refresh();
+      router.replace('/tm/login');
+    }
+  };
+
   if (!user) return null;
 
   const visible = NAV.filter((item) => {
@@ -146,6 +162,19 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
             </div>
           )}
         </Link>
+        {/* Signing out used to be reachable only from the Profile page. */}
+        <button
+          onClick={signOut}
+          disabled={signingOut}
+          className={cn(
+            'focus-ring mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-60',
+            collapsed && 'justify-center px-0',
+          )}
+          title="Sign out"
+        >
+          <LogOut className="h-[18px] w-[18px] shrink-0" />
+          {!collapsed && <span>{signingOut ? 'Signing out…' : 'Sign out'}</span>}
+        </button>
         <button
           onClick={onToggle}
           className="focus-ring mt-1 flex w-full items-center justify-center gap-2 rounded-lg py-1.5 text-xs text-faint hover:bg-line/30 hover:text-muted"

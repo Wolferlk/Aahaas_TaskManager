@@ -59,10 +59,25 @@ export async function GET(req: Request) {
         where.push("DATE(t.deadline) = CURDATE() AND t.status NOT IN ('COMPLETED','CANCELLED')");
         break;
       case 'team': {
-        where.push('t.team_id IS NOT NULL');
-        if (user.role !== 'MANAGER' && user.team_id) {
-          where.push('(t.team_id = ? OR t.team_id IN (SELECT id FROM tm_teams WHERE leader_user_id = ?))');
-          params.push(user.team_id, user.id);
+        // Work other people are doing. Requiring t.team_id hid every task
+        // created by someone who is not in a team yet, which is most of them,
+        // so the view is scoped by who the work belongs to instead.
+        where.push('t.is_personal = 0');
+        if (user.role === 'MANAGER') {
+          // Everything except the Manager's own solo work, which lives in My Tasks.
+          where.push('NOT (t.created_by = ? AND t.assignee_id <=> ?)');
+          params.push(user.id, user.id);
+        } else {
+          where.push(
+            `(t.team_id IN (SELECT id FROM tm_teams WHERE leader_user_id = ? AND deleted_at IS NULL)
+              OR t.assignee_id IN (
+                   SELECT u2.id FROM tm_users u2
+                    WHERE u2.deleted_at IS NULL
+                      AND u2.team_id IN (SELECT id FROM tm_teams WHERE leader_user_id = ? AND deleted_at IS NULL))
+              ${user.team_id ? 'OR t.team_id = ?' : ''})`,
+          );
+          params.push(user.id, user.id);
+          if (user.team_id) params.push(user.team_id);
         }
         break;
       }
@@ -234,7 +249,9 @@ export async function POST(req: Request) {
           body.project_id ?? null,
           body.department_id ?? user.department_id ?? null,
           body.team_id ?? (body.is_personal ? null : user.team_id) ?? null,
-          body.assignee_id ?? (body.is_personal ? user.id : null),
+          // Never leave a task ownerless — an unassigned task appears in
+          // nobody's list and is effectively lost.
+          body.assignee_id ?? user.id,
           user.id,
           null,
           body.category_id ?? null,

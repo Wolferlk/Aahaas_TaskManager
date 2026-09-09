@@ -44,6 +44,7 @@ export async function GET(req: Request) {
     const rows = await query(
       `SELECT a.*, r.full_name AS requester_name, r.avatar_url AS requester_avatar, r.email AS requester_email,
               r.requested_role, r.job_title, r.status AS requester_status,
+              r.department_id AS requester_department_id, r.team_id AS requester_team_id,
               d.name AS department_name, t.name AS team_name,
               decider.full_name AS decided_by_name,
               tk.task_number, tk.title AS task_title, tk.deadline AS task_deadline

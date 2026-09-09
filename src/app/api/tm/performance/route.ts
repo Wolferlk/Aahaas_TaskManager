@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { execute, queryOne } from '@/lib/db';
+import { execute, query, queryOne } from '@/lib/db';
 import { forbidden, requireUser, searchParams, toErrorResponse } from '@/lib/api';
-import { computeMetrics, getWeights, leaderboard, scoreFromMetrics } from '@/lib/performance';
+import { computeMetrics, getWeights, scoreFromMetrics } from '@/lib/performance';
 import { interpretPerformance } from '@/lib/ai';
 import { teamMemberIds } from '@/lib/tasks';
 
@@ -53,6 +53,59 @@ export async function GET(req: Request) {
       [targetId, year, month],
     );
 
+    // Who this person may look at. Without this list the page could only ever
+    // show the signed-in user, so a Manager never saw their team's numbers.
+    const viewableIds =
+      me.role === 'MANAGER' ? null : me.role === 'LEADER' ? [...new Set([me.id, ...(await teamMemberIds(me.id))])] : [me.id];
+
+    const people =
+      viewableIds === null
+        ? await query(
+            `SELECT u.id, u.full_name, u.avatar_url, u.job_title, u.role,
+                    d.name AS department_name, t.name AS team_name
+               FROM tm_users u
+               LEFT JOIN tm_departments d ON d.id = u.department_id
+               LEFT JOIN tm_teams t ON t.id = u.team_id
+              WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL
+              ORDER BY FIELD(u.role,'MANAGER','LEADER','EMPLOYEE'), u.full_name`,
+          )
+        : await query(
+            `SELECT u.id, u.full_name, u.avatar_url, u.job_title, u.role,
+                    d.name AS department_name, t.name AS team_name
+               FROM tm_users u
+               LEFT JOIN tm_departments d ON d.id = u.department_id
+               LEFT JOIN tm_teams t ON t.id = u.team_id
+              WHERE u.id IN (?) AND u.deleted_at IS NULL
+              ORDER BY FIELD(u.role,'MANAGER','LEADER','EMPLOYEE'), u.full_name`,
+            [viewableIds],
+          );
+
+    // The score for each viewable person, so the portal can show the team at
+    // a glance rather than one card at a time.
+    const team =
+      me.role === 'EMPLOYEE'
+        ? []
+        : await Promise.all(
+            (people as Array<{ id: number; full_name: string; avatar_url: string | null; job_title: string | null; team_name: string | null }>).map(
+              async (p) => {
+                const m = await computeMetrics(p.id, year, month);
+                return {
+                  id: p.id,
+                  full_name: p.full_name,
+                  avatar_url: p.avatar_url,
+                  job_title: p.job_title,
+                  team_name: p.team_name,
+                  score: scoreFromMetrics(m, weights).score,
+                  tasks_completed: m.tasks_completed,
+                  tasks_assigned: m.tasks_assigned,
+                  tasks_overdue: m.tasks_overdue,
+                  deadline_met_rate: m.deadline_met_rate,
+                  daily_updates_submitted: m.daily_updates_submitted,
+                };
+              },
+            ),
+          );
+
     return NextResponse.json({
       user: { id: targetId, ...target },
       period: { year, month, label: `${MONTHS[month - 1]} ${year}` },
@@ -63,7 +116,9 @@ export async function GET(req: Request) {
       breakdown: lines,
       weights,
       ai_analysis: stored?.ai_analysis ? JSON.parse(stored.ai_analysis) : null,
-      leaderboard_visible: me.role !== 'EMPLOYEE' || true,
+      people,
+      team: team.sort((a, b) => b.score - a.score),
+      can_view_others: me.role !== 'EMPLOYEE',
     });
   } catch (err) {
     return toErrorResponse(err);

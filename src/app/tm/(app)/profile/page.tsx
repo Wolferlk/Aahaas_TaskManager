@@ -10,6 +10,7 @@ import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Label, Select, FieldError } from '@/components/ui/Field';
+import { PhoneInput } from '@/components/ui/PhoneInput';
 import { ProgressRing, Skeleton } from '@/components/ui/Misc';
 import { AvatarUpload } from '@/components/tm/AvatarUpload';
 import { useSession } from '@/hooks/useSession';
@@ -104,10 +105,17 @@ export default function ProfilePage() {
                     <span className="text-lg font-bold text-ink">{Math.round(data.score)}</span>
                   </ProgressRing>
                   <div className="text-left text-sm text-muted">
+                    <p className="font-medium text-ink">Performance score {Math.round(data.score)}/100</p>
                     <p>{data.metrics.tasks_completed} tasks completed</p>
                     <p>Joined {fmtDate(data.user.created_at)}</p>
                   </div>
                 </div>
+                <Link
+                  href="/tm/performance"
+                  className="mt-2 text-xs font-medium text-brand hover:underline"
+                >
+                  How this score is calculated
+                </Link>
               </CardContent>
             </Card>
 
@@ -291,7 +299,7 @@ function ProfileForm({
         </div>
         <div>
           <Label htmlFor="pf-phone">Mobile</Label>
-          <Input id="pf-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <PhoneInput id="pf-phone" value={phone} onChange={setPhone} />
         </div>
       </div>
 

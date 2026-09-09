@@ -1,6 +1,7 @@
 'use client';
 
-import { forwardRef } from 'react';
+import { forwardRef, useId, useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
@@ -17,6 +18,42 @@ export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTML
   ),
 );
 Input.displayName = 'Input';
+
+/**
+ * A password box with a reveal toggle. Typing a password you cannot see is
+ * the single biggest source of "my password is wrong" support traffic, so
+ * every password field in the app uses this rather than a bare `type=password`.
+ */
+export const PasswordInput = forwardRef<
+  HTMLInputElement,
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'>
+>(({ className, id, ...props }, ref) => {
+  const [reveal, setReveal] = useState(false);
+  const fallbackId = useId();
+
+  return (
+    <div className="relative">
+      <Input
+        ref={ref}
+        id={id ?? fallbackId}
+        type={reveal ? 'text' : 'password'}
+        className={cn('pr-11', className)}
+        {...props}
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        onClick={() => setReveal((v) => !v)}
+        className="focus-ring absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-2 text-faint transition-colors hover:text-ink"
+        aria-label={reveal ? 'Hide password' : 'Show password'}
+        title={reveal ? 'Hide password' : 'Show password'}
+      >
+        {reveal ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </div>
+  );
+});
+PasswordInput.displayName = 'PasswordInput';
 
 export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(
   ({ className, ...props }, ref) => (

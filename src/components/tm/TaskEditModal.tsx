@@ -49,7 +49,7 @@ export function TaskEditModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { users, projects, departments, teams, categories } = useMeta();
+  const { users, projects, activeDepartments, activeTeams, categories } = useMeta();
   const toast = useToast();
 
   const [form, setForm] = useState(() => toForm(task));
@@ -170,7 +170,7 @@ export function TaskEditModal({
             <Label htmlFor="te-dept">Department</Label>
             <Select id="te-dept" value={form.department_id} onChange={(e) => set('department_id', e.target.value)}>
               <option value="">—</option>
-              {departments.map((d) => (
+              {activeDepartments.map((d) => (
                 <option key={d.id} value={d.id}>{d.name}</option>
               ))}
             </Select>
@@ -179,7 +179,7 @@ export function TaskEditModal({
             <Label htmlFor="te-team">Team</Label>
             <Select id="te-team" value={form.team_id} onChange={(e) => set('team_id', e.target.value)}>
               <option value="">—</option>
-              {teams.map((t) => (
+              {activeTeams.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}
             </Select>

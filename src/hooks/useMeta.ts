@@ -57,9 +57,17 @@ export function useMeta() {
     dedupingInterval: 30000,
   });
 
+  const departments = data?.departments ?? [];
+  const teams = data?.teams ?? [];
+
   return {
-    departments: data?.departments ?? [],
-    teams: data?.teams ?? [],
+    // The full lists still carry disabled rows, because a task or a person can
+    // legitimately still point at one and its name has to render. Pickers use
+    // the `active*` lists so nothing disabled can be chosen afresh.
+    departments,
+    teams,
+    activeDepartments: departments.filter((d) => d.status !== 'DISABLED'),
+    activeTeams: teams.filter((t) => t.status !== 'DISABLED'),
     projects: data?.projects ?? [],
     categories: data?.categories ?? [],
     users: data?.users ?? [],

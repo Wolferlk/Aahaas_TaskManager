@@ -2,14 +2,15 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
-import { Sparkles, TrendingUp, TrendingDown, Settings2 } from 'lucide-react';
+import { Sparkles, TrendingUp, TrendingDown, Settings2, Users } from 'lucide-react';
 import { fetcher, apiPost, apiPut, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { ProgressRing, ProgressBar, Skeleton } from '@/components/ui/Misc';
 import { Modal, OverlayHeader } from '@/components/ui/Overlay';
-import { Input, Label, FieldError } from '@/components/ui/Field';
+import { Input, Label, Select, FieldError } from '@/components/ui/Field';
+import { Avatar } from '@/components/ui/Avatar';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/components/ui/Toast';
 import { cn } from '@/lib/cn';
@@ -24,6 +25,20 @@ interface PerfLine {
   explanation: string;
 }
 
+interface TeamRow {
+  id: number;
+  full_name: string;
+  avatar_url: string | null;
+  job_title: string | null;
+  team_name: string | null;
+  score: number;
+  tasks_completed: number;
+  tasks_assigned: number;
+  tasks_overdue: number;
+  deadline_met_rate: number;
+  daily_updates_submitted: number;
+}
+
 interface PerfData {
   user: { id: number; full_name: string };
   period: { year: number; month: number; label: string };
@@ -34,20 +49,35 @@ interface PerfData {
   breakdown: PerfLine[];
   weights: Record<string, number>;
   ai_analysis: { strengths: string[]; improvements: string[]; summary: string } | null;
+  people: Array<{ id: number; full_name: string; role: string; team_name: string | null }>;
+  team: TeamRow[];
+  can_view_others: boolean;
 }
 
 export default function PerformancePage() {
-  const { can } = useSession();
+  const { can, user } = useSession();
   const [configOpen, setConfigOpen] = useState(false);
   const now = new Date();
-  const { data, isLoading, mutate } = useSWR<PerfData>(`/api/tm/performance?year=${now.getFullYear()}&month=${now.getMonth() + 1}`, fetcher);
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+
+  // Whose numbers are on screen. Managers and Leaders can point this at anyone
+  // they supervise; for everyone else it stays on themselves.
+  const [viewingId, setViewingId] = useState<string>('');
+
+  const { data, isLoading, mutate } = useSWR<PerfData>(
+    `/api/tm/performance?year=${year}&month=${month}${viewingId ? `&user_id=${viewingId}` : ''}`,
+    fetcher,
+  );
   const [generating, setGenerating] = useState(false);
   const toast = useToast();
+
+  const viewingSelf = !viewingId || Number(viewingId) === user?.id;
 
   const generate = async () => {
     setGenerating(true);
     try {
-      const res = await apiPost('/api/tm/performance', {});
+      const res = await apiPost('/api/tm/performance', viewingSelf ? {} : { user_id: Number(viewingId), year, month });
       toast({ kind: res.ai_used ? 'success' : 'warning', title: res.ai_used ? 'Analysis generated' : res.message });
       mutate();
     } catch (err) {
@@ -61,12 +91,31 @@ export default function PerformancePage() {
     <>
       <PageHeader
         title="Performance"
-        subtitle={data ? data.period.label : 'This month'}
-        actions={can('tm.performance.configure') && (
-          <Button size="sm" variant="secondary" onClick={() => setConfigOpen(true)}>
-            <Settings2 className="h-4 w-4" /> Configure weights
-          </Button>
-        )}
+        subtitle={data ? `${data.user.full_name} · ${data.period.label}` : 'This month'}
+        actions={
+          <div className="flex items-center gap-2">
+            {data?.can_view_others && data.people.length > 1 && (
+              <Select
+                aria-label="Whose performance to show"
+                value={viewingId || String(user?.id ?? '')}
+                onChange={(e) => setViewingId(e.target.value)}
+                className="!h-9 !w-auto text-sm"
+              >
+                {data.people.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.full_name}
+                    {p.id === user?.id ? ' (me)' : ''}
+                  </option>
+                ))}
+              </Select>
+            )}
+            {can('tm.performance.configure') && (
+              <Button size="sm" variant="secondary" onClick={() => setConfigOpen(true)}>
+                <Settings2 className="h-4 w-4" /> Configure weights
+              </Button>
+            )}
+          </div>
+        }
       />
       <PageBody className="space-y-6">
         {isLoading && <Skeleton className="h-96" />}
@@ -136,6 +185,66 @@ export default function PerformancePage() {
                 )}
               </CardContent>
             </Card>
+
+            {data.can_view_others && data.team.length > 0 && (
+              <Card className="lg:col-span-3">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-1.5">
+                    <Users className="h-4 w-4 text-muted" /> Team performance · {data.period.label}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0 pt-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[640px] text-sm">
+                      <thead>
+                        <tr className="border-b border-line text-left text-[11px] uppercase tracking-wide text-faint">
+                          <th className="px-5 py-2 font-semibold">Person</th>
+                          <th className="px-3 py-2 text-right font-semibold">Score</th>
+                          <th className="px-3 py-2 text-right font-semibold">Assigned</th>
+                          <th className="px-3 py-2 text-right font-semibold">Completed</th>
+                          <th className="px-3 py-2 text-right font-semibold">Overdue</th>
+                          <th className="px-3 py-2 text-right font-semibold">Deadlines met</th>
+                          <th className="px-5 py-2 text-right font-semibold">Updates</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-line">
+                        {data.team.map((row) => (
+                          <tr
+                            key={row.id}
+                            onClick={() => setViewingId(String(row.id))}
+                            className={cn(
+                              'cursor-pointer transition-colors hover:bg-line/20',
+                              row.id === data.user.id && 'bg-brand-soft/40',
+                            )}
+                          >
+                            <td className="px-5 py-2.5">
+                              <div className="flex items-center gap-2.5">
+                                <Avatar name={row.full_name} src={row.avatar_url} size="xs" />
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium text-ink">{row.full_name}</p>
+                                  <p className="truncate text-[11px] text-faint">
+                                    {row.job_title ?? row.team_name ?? '—'}
+                                  </p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 text-right font-semibold text-ink">{Math.round(row.score)}</td>
+                            <td className="px-3 py-2.5 text-right text-muted">{row.tasks_assigned}</td>
+                            <td className="px-3 py-2.5 text-right text-muted">{row.tasks_completed}</td>
+                            <td className={cn('px-3 py-2.5 text-right', row.tasks_overdue > 0 ? 'text-red-500' : 'text-muted')}>
+                              {row.tasks_overdue}
+                            </td>
+                            <td className="px-3 py-2.5 text-right text-muted">{Math.round(row.deadline_met_rate)}%</td>
+                            <td className="px-5 py-2.5 text-right text-muted">{row.daily_updates_submitted}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="px-5 py-3 text-xs text-faint">Select a row to open that person&apos;s full breakdown.</p>
+                </CardContent>
+              </Card>
+            )}
           </div>
         )}
       </PageBody>

@@ -3,6 +3,10 @@
 @tailwind utilities;
 
 :root {
+  /* Native controls (select popups, date pickers, scrollbars) follow this.
+     Without it the browser paints option lists on a light ground while they
+     inherit our near-white dark-mode text, which makes them unreadable. */
+  color-scheme: light;
   --bg: 248 250 252;
   --surface: 255 255 255;
   --elevated: 255 255 255;
@@ -19,6 +23,7 @@
 :root[data-theme='dark'],
 :root:not([data-theme='light']) {
   @media (prefers-color-scheme: dark) {
+    color-scheme: dark;
     --bg: 8 10 16;
     --surface: 15 18 27;
     --elevated: 21 25 36;
@@ -34,6 +39,7 @@
 }
 
 :root[data-theme='dark'] {
+  color-scheme: dark;
   --bg: 8 10 16;
   --surface: 15 18 27;
   --elevated: 21 25 36;
@@ -89,6 +95,15 @@ body {
 }
 
 input, textarea, select, button { font: inherit; }
+
+/* Some engines render <option> with the <select>'s inherited colour on the
+   platform's own popup background. Pinning both keeps every dropdown legible
+   in either theme. */
+select option,
+select optgroup {
+  background-color: rgb(var(--surface));
+  color: rgb(var(--ink));
+}
 
 /* ------------------------------------------------------------------ *
  * Motion helpers

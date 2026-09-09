@@ -13,7 +13,7 @@ function TeamTasksInner() {
     <>
       <PageHeader
         title="Team Tasks"
-        subtitle="Work assigned across the teams you lead."
+        subtitle="Everything your people are working on."
         actions={<Button size="sm" onClick={() => setAddOpen(true)}><Plus className="h-4 w-4" /> New Task</Button>}
       />
       <TaskListView view="team" />

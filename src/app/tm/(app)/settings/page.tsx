@@ -8,7 +8,7 @@ import { fetcher, apiPost, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Input, Label, FieldError } from '@/components/ui/Field';
+import { Label, PasswordInput, FieldError } from '@/components/ui/Field';
 import { Tabs } from '@/components/ui/Tabs';
 import { EmailSettings } from '@/components/tm/settings/EmailSettings';
 import { GithubSettings } from '@/components/tm/settings/GithubSettings';
@@ -175,16 +175,34 @@ function SecurityPanel() {
         <form onSubmit={submit} className="space-y-3">
           <div>
             <Label htmlFor="cur">Current password</Label>
-            <Input id="cur" type="password" required value={current} onChange={(e) => setCurrent(e.target.value)} />
+            <PasswordInput
+              id="cur"
+              required
+              autoComplete="current-password"
+              value={current}
+              onChange={(e) => setCurrent(e.target.value)}
+            />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label htmlFor="new">New password</Label>
-              <Input id="new" type="password" required value={next} onChange={(e) => setNext(e.target.value)} />
+              <PasswordInput
+                id="new"
+                required
+                autoComplete="new-password"
+                value={next}
+                onChange={(e) => setNext(e.target.value)}
+              />
             </div>
             <div>
               <Label htmlFor="conf">Confirm</Label>
-              <Input id="conf" type="password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+              <PasswordInput
+                id="conf"
+                required
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+              />
             </div>
           </div>
           <FieldError>{error}</FieldError>

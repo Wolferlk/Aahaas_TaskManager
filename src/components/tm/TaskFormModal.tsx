@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 import { Modal, OverlayHeader } from '@/components/ui/Overlay';
 import { Button } from '@/components/ui/Button';
@@ -21,7 +21,7 @@ export function TaskFormModal({
   onCreated?: (id: number) => void;
   defaults?: { project_id?: number; team_id?: number; parent_task_id?: number; status?: string };
 }) {
-  const { users, projects, departments, teams, categories } = useMeta();
+  const { users, projects, activeDepartments, activeTeams, categories } = useMeta();
   const { user } = useSession();
   const toast = useToast();
 
@@ -42,9 +42,15 @@ export function TaskFormModal({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Every task belongs to somebody. Unless another name is picked the creator
+  // owns it, so it lands in a real "My Tasks" list rather than nowhere.
+  useEffect(() => {
+    if (user && !assigneeId) setAssigneeId(String(user.id));
+  }, [user, assigneeId]);
+
   const reset = () => {
     setTitle('');
-    setAssigneeId('');
+    setAssigneeId(user ? String(user.id) : '');
     setDeadline('');
     setPriority('MEDIUM');
     setExpanded(false);
@@ -71,6 +77,10 @@ export function TaskFormModal({
       setError('Give the task a title.');
       return;
     }
+    if (!assigneeId) {
+      setError('Choose who this task is for.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -78,7 +88,7 @@ export function TaskFormModal({
         title: title.trim(),
         description: description.trim() || null,
         task_type: taskType,
-        assignee_id: assigneeId ? Number(assigneeId) : null,
+        assignee_id: Number(assigneeId),
         deadline: deadline || null,
         priority,
         status: defaults?.status ?? 'TODO',
@@ -123,9 +133,8 @@ export function TaskFormModal({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label htmlFor="qa-assignee">Assignee</Label>
-            <Select id="qa-assignee" value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}>
-              <option value="">Unassigned</option>
-              <option value={String(user?.id)}>Myself</option>
+            <Select id="qa-assignee" required value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}>
+              <option value={String(user?.id ?? '')}>Myself</option>
               {assignableUsers
                 .filter((u) => u.id !== user?.id)
                 .map((u) => (
@@ -192,7 +201,7 @@ export function TaskFormModal({
                 <Label htmlFor="qa-dept">Department</Label>
                 <Select id="qa-dept" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
                   <option value="">—</option>
-                  {departments.map((d) => (
+                  {activeDepartments.map((d) => (
                     <option key={d.id} value={d.id}>{d.name}</option>
                   ))}
                 </Select>
@@ -201,7 +210,7 @@ export function TaskFormModal({
                 <Label htmlFor="qa-team">Team</Label>
                 <Select id="qa-team" value={teamId} onChange={(e) => setTeamId(e.target.value)}>
                   <option value="">—</option>
-                  {teams.map((t) => (
+                  {activeTeams.map((t) => (
                     <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
                 </Select>
