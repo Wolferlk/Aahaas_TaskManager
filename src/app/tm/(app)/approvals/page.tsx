@@ -44,6 +44,19 @@ const TYPE_LABEL: Record<string, string> = {
   LEADER_REQUEST: 'Leader Requests',
 };
 
+/** Approval payloads arrive as JSON (already parsed by mysql2) or as a string. */
+function payloadOf(a: Approval): Record<string, unknown> {
+  if (!a.payload) return {};
+  if (typeof a.payload === 'string') {
+    try {
+      return JSON.parse(a.payload) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return a.payload as Record<string, unknown>;
+}
+
 export default function ApprovalsPage() {
   const [type, setType] = useState('ALL');
   const { data, isLoading, mutate } = useSWR<{ approvals: Approval[]; counts: Record<string, number> }>(
@@ -105,7 +118,23 @@ export default function ApprovalsPage() {
                       {a.task_number}: {a.task_title} — {a.reason}
                     </p>
                   )}
-                  {a.type !== 'USER_SIGNUP' && a.type !== 'DEADLINE_EXTENSION' && a.reason && (
+                  {(a.type === 'TASK_COMPLETION' || a.type === 'TASK_REASSIGNMENT') && (
+                    <p className="mt-1 text-xs text-muted">
+                      {a.task_number ? `${a.task_number}: ` : ''}{a.task_title ?? 'Task'}
+                      {a.type === 'TASK_REASSIGNMENT' && payloadOf(a).new_assignee_name ? (
+                        <> — hand over to <strong className="text-ink">{String(payloadOf(a).new_assignee_name)}</strong></>
+                      ) : null}
+                      {a.reason ? ` — ${a.reason}` : ''}
+                    </p>
+                  )}
+                  {a.type === 'LEADER_REQUEST' && (
+                    <p className="mt-1 text-xs text-muted">
+                      Asking for <strong className="text-ink">Leader</strong> access
+                      {a.team_name ? <> for <strong className="text-ink">{a.team_name}</strong></> : null}
+                      {a.reason ? ` — ${a.reason}` : ''}
+                    </p>
+                  )}
+                  {!['USER_SIGNUP', 'DEADLINE_EXTENSION', 'TASK_COMPLETION', 'TASK_REASSIGNMENT', 'LEADER_REQUEST'].includes(a.type) && a.reason && (
                     <p className="mt-1 text-xs text-muted">{a.reason}</p>
                   )}
 

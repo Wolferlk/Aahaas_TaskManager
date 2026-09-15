@@ -86,11 +86,15 @@ export async function taskScope(user: SessionUser, alias = 't'): Promise<Scope> 
 
   if (user.role === 'LEADER') {
     const teams = await ledTeamIds(user.id);
+    // Membership lives in tm_team_members; tm_users.team_id is only the
+    // person's primary team and is often unset, so both are consulted or a
+    // Leader sees none of their team's work.
     const teamSql = teams.length
       ? ` OR (${a}.visibility <> 'PRIVATE' AND (${a}.team_id IN (?) OR ${a}.assignee_id IN (
-            SELECT u2.id FROM tm_users u2 WHERE u2.team_id IN (?))))`
+            SELECT u2.id FROM tm_users u2 WHERE u2.team_id IN (?)
+             UNION SELECT m2.user_id FROM tm_team_members m2 WHERE m2.is_active = 1 AND m2.team_id IN (?))))`
       : '';
-    const teamParams = teams.length ? [teams, teams] : [];
+    const teamParams = teams.length ? [teams, teams, teams] : [];
     return {
       sql: `(${mine}${teamSql}
              OR (${a}.visibility IN ('DEPARTMENT','PUBLIC') AND ${a}.department_id <=> ?))`,
@@ -211,7 +215,7 @@ export function focusScore(task: {
     reasons.push(`Blocks ${task.blocks_count} other task${task.blocks_count > 1 ? 's' : ''}`);
   }
 
-  if (task.status === 'IN_PROGRESS') {
+  if (task.status === 'IN_PROGRESS' || task.status === 'REOPENED') {
     score += 8;
     if (task.progress >= 50) reasons.push(`${task.progress}% done — close to finishing`);
   }

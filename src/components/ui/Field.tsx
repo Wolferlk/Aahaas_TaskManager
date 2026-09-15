@@ -1,7 +1,7 @@
 'use client';
 
-import { forwardRef, useId, useState } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
+import { forwardRef, useId, useRef, useState } from 'react';
+import { Eye, EyeOff, Search, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
@@ -99,4 +99,60 @@ export function FieldError({ children }: { children?: string | null }) {
 export function FieldHint({ children }: { children?: React.ReactNode }) {
   if (!children) return null;
   return <p className="mt-1.5 text-xs text-muted">{children}</p>;
+}
+
+/**
+ * Search box with a clear affordance. The X only appears once there is text to
+ * clear, and returns focus to the input so typing can continue straight away.
+ */
+export function SearchInput({
+  value,
+  onValueChange,
+  placeholder = 'Search...',
+  className,
+  ...props
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> & {
+  value: string;
+  onValueChange: (v: string) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+
+  return (
+    <div className={cn('relative', className)}>
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
+      <input
+        ref={ref}
+        type="search"
+        value={value}
+        onChange={(e) => onValueChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && value) {
+            e.preventDefault();
+            onValueChange('');
+          }
+        }}
+        placeholder={placeholder}
+        className={cn(
+          'focus-ring h-9 w-full rounded-lg border border-line bg-surface pl-9 text-sm placeholder:text-faint',
+          // Hide the browser's own clear affordance so there is only one.
+          '[&::-webkit-search-cancel-button]:appearance-none',
+          value ? 'pr-9' : 'pr-3',
+        )}
+        {...props}
+      />
+      {value && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          onClick={() => {
+            onValueChange('');
+            ref.current?.focus();
+          }}
+          className="focus-ring absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-faint hover:bg-line/50 hover:text-ink"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
 }

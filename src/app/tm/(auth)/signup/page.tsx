@@ -191,6 +191,7 @@ export default function SignupPage() {
               <Select id="role" value={requestedRole} onChange={(e) => setRequestedRole(e.target.value)}>
                 <option value="EMPLOYEE">Employee</option>
                 <option value="LEADER">Leader</option>
+                <option value="MANAGER">Manager</option>
               </Select>
             </div>
             <div>
@@ -206,15 +207,16 @@ export default function SignupPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label htmlFor="empid">Employee ID (optional)</Label>
-              <Input id="empid" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} />
-            </div>
-            <div>
-              <Label htmlFor="phone">Mobile (optional)</Label>
-              <PhoneInput id="phone" value={phone} onChange={setPhone} />
-            </div>
+          <div>
+            <Label htmlFor="empid">Employee ID (optional)</Label>
+            <Input id="empid" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} />
+          </div>
+
+          {/* Mobile gets its own row: in a half-width column the country code
+              select left too little room to read the number back. */}
+          <div>
+            <Label htmlFor="phone">Mobile (optional)</Label>
+            <PhoneInput id="phone" value={phone} onChange={setPhone} />
           </div>
 
           <FieldError>{error}</FieldError>

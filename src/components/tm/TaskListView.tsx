@@ -3,13 +3,13 @@
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Search, LayoutGrid, List as ListIcon, Calendar as CalendarIcon, ListChecks } from 'lucide-react';
+import { LayoutGrid, List as ListIcon, Calendar as CalendarIcon, ListChecks, FilterX } from 'lucide-react';
 import Link from 'next/link';
 import { fetcher } from '@/lib/client';
 import { PriorityBadge, StatusBadge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState, ProgressBar, Skeleton } from '@/components/ui/Misc';
-import { Select } from '@/components/ui/Field';
+import { Select, SearchInput } from '@/components/ui/Field';
 import { fmtDueIn } from '@/lib/format';
 import { TaskDrawer } from './TaskDrawer';
 
@@ -83,21 +83,27 @@ export function TaskListView({
     keepPreviousData: true,
   });
 
+  const filtersActive = q !== '' || status !== 'ALL' || priority !== 'ALL' || sort !== 'created_at';
+  const clearFilters = () => {
+    setQ('');
+    setStatus('ALL');
+    setPriority('ALL');
+    setSort('created_at');
+    setPage(1);
+  };
+
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3 sm:px-6">
-        <div className="relative flex-1 min-w-[180px] max-w-xs">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
-          <input
-            value={q}
-            onChange={(e) => { setQ(e.target.value); setPage(1); }}
-            placeholder="Filter tasks..."
-            className="focus-ring h-9 w-full rounded-lg border border-line bg-surface pl-9 pr-3 text-sm placeholder:text-faint"
-          />
-        </div>
+        <SearchInput
+          value={q}
+          onValueChange={(v) => { setQ(v); setPage(1); }}
+          placeholder="Filter tasks..."
+          className="flex-1 min-w-[180px] max-w-xs"
+        />
         <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} className="!h-9 !w-auto text-sm">
           <option value="ALL">All statuses</option>
-          {['DRAFT', 'TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'].map((s) => (
+          {['DRAFT', 'TODO', 'IN_PROGRESS', 'REOPENED', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'].map((s) => (
             <option key={s} value={s}>{s.replace('_', ' ')}</option>
           ))}
         </Select>
@@ -113,6 +119,15 @@ export function TaskListView({
           <option value="priority">Priority</option>
           <option value="progress">Progress</option>
         </Select>
+        {filtersActive && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="focus-ring flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-muted hover:bg-line/30 hover:text-ink"
+          >
+            <FilterX className="h-3.5 w-3.5" /> Clear filters
+          </button>
+        )}
         {showViewSwitch && (
           <div className="ml-auto flex items-center gap-1">
             <Link href="/tm/tasks/board" className="focus-ring flex h-9 w-9 items-center justify-center rounded-lg text-faint hover:bg-line/30 hover:text-ink">

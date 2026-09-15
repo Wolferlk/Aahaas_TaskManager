@@ -29,7 +29,7 @@ export async function GET(_req: Request, { params }: Ctx) {
                 SUM(status NOT IN ('COMPLETED','CANCELLED') AND deadline < NOW()) AS overdue,
                 SUM(status = 'BLOCKED') AS blocked,
                 SUM(priority = 'CRITICAL' AND status NOT IN ('COMPLETED','CANCELLED') AND deadline < NOW()) AS critical_overdue,
-                SUM(status = 'IN_PROGRESS') AS in_progress
+                SUM(status IN ('IN_PROGRESS','REOPENED')) AS in_progress
            FROM tm_tasks WHERE project_id = ? AND deleted_at IS NULL`,
         [id],
       ),
@@ -46,7 +46,7 @@ export async function GET(_req: Request, { params }: Ctx) {
                 u.full_name AS assignee_name, u.avatar_url AS assignee_avatar
            FROM tm_tasks t LEFT JOIN tm_users u ON u.id = t.assignee_id
           WHERE t.project_id = ? AND t.deleted_at IS NULL
-          ORDER BY FIELD(t.status,'BLOCKED','IN_PROGRESS','REVIEW','TODO','WAITING','COMPLETED','CANCELLED'),
+          ORDER BY FIELD(t.status,'BLOCKED','REOPENED','IN_PROGRESS','REVIEW','TODO','WAITING','COMPLETED','CANCELLED'),
                    FIELD(t.priority,'CRITICAL','HIGH','MEDIUM','LOW'), t.deadline
           LIMIT 200`,
         [id],

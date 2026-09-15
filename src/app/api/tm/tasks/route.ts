@@ -68,15 +68,29 @@ export async function GET(req: Request) {
           where.push('NOT (t.created_by = ? AND t.assignee_id <=> ?)');
           params.push(user.id, user.id);
         } else {
+          // Teams led either through tm_teams.leader_user_id or a LEADER row in
+          // tm_team_members, and members resolved through both tm_users.team_id
+          // and the membership table - otherwise a Leader's team view is empty.
           where.push(
             `(t.team_id IN (SELECT id FROM tm_teams WHERE leader_user_id = ? AND deleted_at IS NULL)
+              OR t.team_id IN (SELECT m0.team_id FROM tm_team_members m0
+                                WHERE m0.user_id = ? AND m0.is_active = 1 AND m0.role_in_team = 'LEADER')
               OR t.assignee_id IN (
                    SELECT u2.id FROM tm_users u2
                     WHERE u2.deleted_at IS NULL
-                      AND u2.team_id IN (SELECT id FROM tm_teams WHERE leader_user_id = ? AND deleted_at IS NULL))
+                      AND u2.team_id IN (SELECT id FROM tm_teams WHERE leader_user_id = ? AND deleted_at IS NULL)
+                   UNION
+                   SELECT m2.user_id FROM tm_team_members m2
+                    WHERE m2.is_active = 1
+                      AND m2.team_id IN (SELECT id FROM tm_teams WHERE leader_user_id = ? AND deleted_at IS NULL)
+                   UNION
+                   SELECT m3.user_id FROM tm_team_members m3
+                    WHERE m3.is_active = 1
+                      AND m3.team_id IN (SELECT m4.team_id FROM tm_team_members m4
+                                          WHERE m4.user_id = ? AND m4.is_active = 1 AND m4.role_in_team = 'LEADER'))
               ${user.team_id ? 'OR t.team_id = ?' : ''})`,
           );
-          params.push(user.id, user.id);
+          params.push(user.id, user.id, user.id, user.id, user.id);
           if (user.team_id) params.push(user.team_id);
         }
         break;
@@ -205,6 +219,34 @@ export async function POST(req: Request) {
       if (!parent) throw badRequest('The parent task no longer exists.');
     }
 
+    // Tasks used to inherit only the *creator's* team, so anything raised by
+    // someone without a team landed with team_id NULL - which made every
+    // team-scoped view (Leader portal, team boards, team counts) come up empty.
+    // Fall back to the assignee's team, via the membership table if their
+    // profile column is unset.
+    const assigneeId = body.assignee_id ?? user.id;
+    let resolvedTeamId: number | null = body.team_id ?? null;
+    if (resolvedTeamId == null && !body.is_personal) {
+      const owner = await queryOne<{ team_id: number | null }>(
+        `SELECT COALESCE(u.team_id,
+                  (SELECT m.team_id FROM tm_team_members m
+                    WHERE m.user_id = u.id AND m.is_active = 1
+                    ORDER BY (m.role_in_team = 'LEADER') DESC, m.team_id LIMIT 1)) AS team_id
+           FROM tm_users u WHERE u.id = ?`,
+        [assigneeId],
+      );
+      resolvedTeamId = owner?.team_id ?? user.team_id ?? null;
+    }
+
+    // Recording the responsible leader lets review and escalation find a person
+    // instead of falling back to the creator.
+    const resolvedLeaderId = resolvedTeamId
+      ? (await queryOne<{ leader_user_id: number | null }>(
+          'SELECT leader_user_id FROM tm_teams WHERE id = ? AND deleted_at IS NULL',
+          [resolvedTeamId],
+        ))?.leader_user_id ?? null
+      : null;
+
     const deptCode = body.department_id
       ? (
           await queryOne<{ code: string }>('SELECT code FROM tm_departments WHERE id = ?', [body.department_id])
@@ -248,12 +290,12 @@ export async function POST(req: Request) {
           body.task_type,
           body.project_id ?? null,
           body.department_id ?? user.department_id ?? null,
-          body.team_id ?? (body.is_personal ? null : user.team_id) ?? null,
+          body.is_personal ? null : resolvedTeamId,
           // Never leave a task ownerless — an unassigned task appears in
           // nobody's list and is effectively lost.
-          body.assignee_id ?? user.id,
+          assigneeId,
           user.id,
-          null,
+          body.is_personal ? null : resolvedLeaderId,
           body.category_id ?? null,
           body.parent_task_id ?? null,
           recurringId,

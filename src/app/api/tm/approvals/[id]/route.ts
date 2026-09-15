@@ -163,7 +163,59 @@ export async function POST(req: Request, { params }: Ctx) {
         if (body.decision === 'APPROVED' && payload?.new_assignee_id) {
           await execute('UPDATE tm_tasks SET assignee_id = ? WHERE id = ?', [payload.new_assignee_id, taskId]);
           await logActivity(taskId, user.id, 'ASSIGNEE_CHANGED', 'assignee_id', null, payload.new_assignee_id);
+          await notify({
+            userId: Number(payload.new_assignee_id),
+            type: 'TASK_ASSIGNED',
+            title: 'A task was reassigned to you',
+            link: `/tm/tasks/${taskId}`,
+            entityType: 'TASK',
+            entityId: taskId,
+            actorId: user.id,
+            priority: 'HIGH',
+          });
         }
+        await notify({
+          userId: request.requester_id!,
+          type: body.decision === 'APPROVED' ? 'REASSIGNMENT_APPROVED' : 'REASSIGNMENT_REJECTED',
+          title: body.decision === 'APPROVED' ? 'Reassignment approved' : 'Reassignment declined',
+          body: body.comment ?? undefined,
+          link: `/tm/tasks/${taskId}`,
+          entityType: 'TASK',
+          entityId: taskId,
+          actorId: user.id,
+        });
+        break;
+      }
+
+      case 'LEADER_REQUEST': {
+        // Only a Manager can change someone's role, so this branch never runs
+        // for a Leader deciding within their own team.
+        if (user.role !== 'MANAGER') throw forbidden('Only a Manager can grant Leader access.');
+        const targetId = request.entity_id ?? request.requester_id!;
+        if (body.decision === 'APPROVED') {
+          await execute("UPDATE tm_users SET role = 'LEADER' WHERE id = ?", [targetId]);
+          const teamId = payload?.team_id ? Number(payload.team_id) : null;
+          if (teamId) {
+            await execute(
+              "UPDATE tm_team_members SET role_in_team = 'LEADER' WHERE team_id = ? AND user_id = ?",
+              [teamId, targetId],
+            );
+            await execute('UPDATE tm_teams SET leader_user_id = ? WHERE id = ? AND leader_user_id IS NULL', [
+              targetId,
+              teamId,
+            ]);
+          }
+          await audit(user.id, 'USER_ROLE_CHANGED', 'USER', targetId, 'EMPLOYEE', 'LEADER');
+        }
+        await notify({
+          userId: targetId,
+          type: body.decision === 'APPROVED' ? 'LEADER_REQUEST_APPROVED' : 'LEADER_REQUEST_REJECTED',
+          title: body.decision === 'APPROVED' ? 'You are now a Leader' : 'Leader request declined',
+          body: body.comment ?? undefined,
+          link: '/tm/dashboard',
+          actorId: user.id,
+          priority: 'HIGH',
+        });
         break;
       }
 

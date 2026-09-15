@@ -27,16 +27,32 @@ interface TaskRow {
 const COLUMN_STYLE: Record<string, string> = {
   TODO: 'border-t-slate-400',
   IN_PROGRESS: 'border-t-blue-500',
+  REOPENED: 'border-t-indigo-500',
   BLOCKED: 'border-t-red-500',
   REVIEW: 'border-t-purple-500',
   COMPLETED: 'border-t-emerald-500',
 };
 
+const VIEWS = [
+  { id: 'my', label: 'My tasks' },
+  { id: 'team', label: 'Team' },
+] as const;
+
 function BoardInner() {
-  const { data, isLoading, mutate } = useSWR<{ tasks: TaskRow[] }>('/api/tm/tasks?limit=100&view=team', fetcher);
+  // The board used to be hard-wired to view=team, which excludes the viewer's
+  // own work - so an employee never saw their own tasks or updates here.
+  const [view, setView] = useState<'my' | 'team'>('my');
+  const { data, isLoading, mutate } = useSWR<{ tasks: TaskRow[] }>(
+    `/api/tm/tasks?limit=200&view=${view}`,
+    fetcher,
+    // The board is a live wall - pick up other people's moves without a reload.
+    { revalidateOnFocus: true, refreshInterval: 30000, keepPreviousData: true },
+  );
   const [dragId, setDragId] = useState<number | null>(null);
   const [openTask, setOpenTask] = useState<number | null>(null);
   const toast = useToast();
+
+  const offBoard = (data?.tasks ?? []).filter((t) => !BOARD_STATUSES.includes(t.status));
 
   const drop = async (status: TaskStatus) => {
     if (!dragId || !data) return;
@@ -56,7 +72,25 @@ function BoardInner() {
 
   return (
     <>
-      <PageHeader title="Board" subtitle="Drag cards between columns to update status." />
+      <PageHeader
+        title="Board"
+        subtitle="Drag cards between columns to update status."
+        actions={
+          <div className="flex rounded-lg border border-line p-0.5">
+            {VIEWS.map((v) => (
+              <button
+                key={v.id}
+                onClick={() => setView(v.id)}
+                className={`focus-ring rounded-md px-3 py-1 text-xs font-medium transition ${
+                  view === v.id ? 'bg-brand text-white' : 'text-muted hover:text-ink'
+                }`}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+        }
+      />
       {isLoading ? (
         <div className="grid grid-cols-1 gap-4 p-6 sm:grid-cols-3 lg:grid-cols-5">
           {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-96" />)}
@@ -108,6 +142,13 @@ function BoardInner() {
             );
           })}
         </div>
+      )}
+      {offBoard.length > 0 && (
+        <p className="px-4 pb-6 text-xs text-muted sm:px-6">
+          {offBoard.length} task{offBoard.length > 1 ? 's are' : ' is'} not shown here because
+          {offBoard.length > 1 ? ' their statuses have' : ' its status has'} no board column
+          ({[...new Set(offBoard.map((t) => STATUS_LABEL[t.status]))].join(', ')}).
+        </p>
       )}
       {openTask && <TaskDrawer taskId={openTask} onClose={() => setOpenTask(null)} onChanged={() => mutate()} />}
     </>

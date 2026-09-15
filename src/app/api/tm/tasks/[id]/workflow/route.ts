@@ -41,6 +41,8 @@ export async function POST(req: Request, { params }: Ctx) {
 
     let to: string;
     let notifyUser: number | null = null;
+    /** Set on 'submit' so a matching TASK_COMPLETION approval row can be raised below. */
+    let reviewerId: number | null = null;
     let notifyType = '';
     let notifyTitle = '';
 
@@ -53,6 +55,7 @@ export async function POST(req: Request, { params }: Ctx) {
           [task.team_id],
         );
         notifyUser = team?.leader_user_id ?? task.created_by;
+        reviewerId = notifyUser;
         notifyType = 'TASK_REVIEW_REQUESTED';
         notifyTitle = `Review requested: ${task.title}`;
         break;
@@ -80,7 +83,7 @@ export async function POST(req: Request, { params }: Ctx) {
       }
       case 'reopen': {
         if (!isReviewer && task.created_by !== user.id) throw forbidden('You cannot reopen this task.');
-        to = 'IN_PROGRESS';
+        to = 'REOPENED';
         notifyUser = task.assignee_id;
         notifyType = 'TASK_REOPENED';
         notifyTitle = `Reopened: ${task.title}`;
@@ -125,11 +128,40 @@ export async function POST(req: Request, { params }: Ctx) {
     }
     if (to === 'REVIEW') sets.push('submitted_at = NOW()');
     if (to === 'CANCELLED') sets.push('cancelled_at = NOW()');
-    if (to === 'IN_PROGRESS' && task.status === 'COMPLETED') {
+    if ((to === 'REOPENED' || to === 'IN_PROGRESS') && task.status === 'COMPLETED') {
       sets.push('completed_at = NULL', 'approved_at = NULL', 'approved_by = NULL');
     }
     values.push(id);
     await execute(`UPDATE tm_tasks SET ${sets.join(', ')} WHERE id = ?`, values);
+
+    // Keep the Approval Center in step with the task: submitting raises a
+    // TASK_COMPLETION request, and every terminal action closes the open one.
+    if (body.action === 'submit') {
+      const existing = await queryOne<{ id: number }>(
+        "SELECT id FROM tm_approval_requests WHERE type = 'TASK_COMPLETION' AND entity_type = 'TASK' AND entity_id = ? AND status = 'PENDING'",
+        [id],
+      );
+      if (!existing) {
+        await execute(
+          `INSERT INTO tm_approval_requests (type, requester_id, assigned_to, entity_type, entity_id, payload, reason, status)
+           VALUES ('TASK_COMPLETION', ?, ?, 'TASK', ?, CAST(? AS JSON), ?, 'PENDING')`,
+          [
+            user.id,
+            reviewerId,
+            id,
+            JSON.stringify({ submitted_from: task.status }),
+            body.comment?.trim() || `Completion review for ${task.title}`,
+          ],
+        );
+      }
+    } else if (['approve', 'reject', 'request_changes', 'reopen', 'cancel'].includes(body.action)) {
+      await execute(
+        `UPDATE tm_approval_requests
+            SET status = ?, decided_by = ?, decided_at = NOW(), decision_comment = ?
+          WHERE type = 'TASK_COMPLETION' AND entity_type = 'TASK' AND entity_id = ? AND status = 'PENDING'`,
+        [body.action === 'approve' ? 'APPROVED' : 'REJECTED', user.id, body.comment ?? null, id],
+      );
+    }
 
     await logStatusChange(id, task.status as never, to as never, user.id, body.comment ?? null);
     await logActivity(

@@ -1,106 +1,63 @@
-While reviewing the Task Management System, I identified several issues and areas for improvement that need to be addressed. I have listed the issues below and categorized them based on their priority for easier reference and tracking.
-
-
-
-S.No
-Issues
-Issue Type
-Priority
-1
-Create One – Create Your Account: An eye icon should be implemented for both the Password and Confirm Password fields to allow users to view or hide the entered password.
-Improvement
-Medium
-2
-Create One – Create Your Account: When selecting the Team field, the dropdown options are not displayed. This issue is occurring throughout the application.
+When attempting to log in to the application, the page keeps loading during the first attempt and redirects back to the same login page. However, the user is able to log in successfully on the second attempt.
 Bug
 High
+2
+Create Your Account page – Department: Only the IT department is available in the department dropdown. It is unclear whether this is intentional or if other departments are expected to be available.
+
+If the application is intended to proceed with only the IT department, all other departments should be disabled or removed from the application wherever they are available.
+Need To Discuss
 3
-Create One – Create Your Account: Character validation should be implemented for the Full Name field to prevent users from entering invalid characters.
-Improvement
-Medium
+Create Your Account page – Mobile Number: The mobile number should be displayed in full. Currently, only a few digits are visible, while the remaining digits are hidden.
+UI Issue
+Low
 4
-Manager Approval: While creating an account, I selected IT as the department. However, the selected department is not displayed in the Manager Approval section.
-Bug
+Approval Center – Manager Mapping: There is an option in the Approval Center to add an employee as a Manager. However, on the Registration page, there are only options to map the user as an Employee or Leader. The Manager role is not available during registration.
+Improvement
 Medium
 5
-Account Approval: A user is able to change their password even though their account has not yet been approved by the manager. Password changes should be restricted until the account is approved.
+People - searchbar - close icon should be implemented
+Improvement
+Low
+6
+Manager Portal – Administration – Teams: The Overdue and Open task counts are not displayed.
 Bug
 Medium
-6
-Forgot Password: When the user selects the Forgot Password option, the password reset email is not being received.
-Bug
-High
 7
-Manager Portal – Task Updates: When a team updates a task, the update is not being notified or reflected in the Manager Portal.
-Bug
-High
+Manager and Employee Portal – Rewards: No data is displayed in the “Reward” tab in either the Manager Portal or the Employee Portal.
+Need To Discuss
 8
-Manager Portal – Team Tasks: When a team creates or updates a new task, the task is not displayed in the Team Task section.
+Manager Portal – Approvals: Data is displayed only under the “All” and “User Signups” sections. However, no data or approval requests are displayed under “Task Completion,” “Deadline Extensions,” “Reassignments,” and “Leader Requests.”
 Bug
 High
 9
-Create One – Create Your Account: Character restrictions/validation should be implemented for the Job Title field.
-Improvement
-Medium
-10
-Create One – Create Your Account: The Mobile Number field should include a Country Code selection option.
-Improvement
-Medium
-11
-Employee Portal – Tasks: When an employee creates a task for themselves, the assignee name is displayed as "Sana", but the corresponding profile image is displayed as a broken image.
+Manager and Employee Portal – My Tasks / Team Tasks: When clicking on a particular task, there is an option called “Open Full Page.” However, clicking on this option redirects to a 404 error page.
 Bug
+High
+10
+Manager and Employee Portal – Task Status: When a manager reopens a completed task through the Manager Portal, the status of the task in the Employee Portal is displayed as “In Progress.” However, it should be displayed as “Reopened.”
+Bug
+High
+11
+Manager Portal – Projects: There is no option to add members to a project. Additionally, the project completion percentage and the total number of tasks are not displayed.
+Improvement
 Medium
 12
-Manager Portal – Departments: Disabled departments are still displayed in the Department dropdown. Disabled departments should not be available for selection.
+Employee Portal – Board: The Board tab is not being updated with the latest changes or task updates.
 Bug
-Medium
+High
 13
-Profile – Security: Eye icons should be implemented for the Current Password, New Password, and Confirm Password fields.
-Improvement
-Medium
+Leader Portal: No data is being displayed or updated in the portal.
+Bug
+High
 14
-Task Creation: A task can be created without selecting an Assignee. The system should either make the Assignee field mandatory or automatically display the unassigned task under the appropriate user account.
-Bug
-High
+Profile – Achievements & Badges: The “Achievements & Badges” section is displayed as blank, and no data is shown.
+Need To Discuss
 15
-Manager Portal – Administration – Teams: When a newly created team is disabled, no Disabled status tag is displayed on the team card. A status tag should be implemented to clearly indicate the team's status.
-Improvement
-Medium
-16
-Manager Portal – Team Performance: The performance details of team members are not being displayed in the Manager Portal.
-Bug
-High
-17
-Manager Portal – Daily Updates: Under Daily Updates → Everyone, tasks are displayed as "+7 more", but the manager is unable to click on the option to view the remaining task details.
-Bug
-High
-18
-Application – Logout: There is no Logout option available in the application.
-Bug
-High
-19
-Manager Portal – Administration – People: The Pending Approval status is available in the filter, but users whose accounts are pending approval are not displayed in the People section when this filter is applied.
-Bug
-High
-20
-Search: The search bar displays an "Open Board" option, but there is no corresponding Open Board option available in the sidebar.
-Bug
-Medium
-21
-Search – UI: When a large number of characters are entered into the search bar, a UI alignment/display issue occurs.
+Profile – GitHub – Manage – Daily Mail / Email: The toggle button is displayed outside, causing a UI alignment issue.
 UI Issue
 Low
-22
-Search: A Remove/Clear (X) icon should be implemented in the search bar to allow users to clear the entered search text.
-Improvement
-Medium
-23
-Manager Portal – Administration – Teams: The Teams section displays options such as Members, Open, and Overdue, but there is no option to add or manage team members and track their open or overdue tasks.
-Bug
-Medium
-23
-In the Employee Portal – Profile section, an automatically generated number is displayed. It is unclear why this number is being shown and whether it is intended to be visible to employees. Please check and confirm.
-Neeed to Discuss
-
-Warm Regards,
-Nandini Akshaya G
+16
+Profile – GitHub – Manage – Daily Mail / Email: The configured daily emails are not being sent to the user.
+Need To Discuss
+17
+Manager and Employee Portal – My Tasks / Team Tasks – Search Bar: A close (X) icon should be implemented in the search bar to allow users to clear the entered text easily. Additionally, a “Clear Filter” option should be provided to reset the applied filters.

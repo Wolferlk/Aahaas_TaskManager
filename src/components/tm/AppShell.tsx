@@ -12,15 +12,17 @@ import { Spinner } from '@/components/ui/Misc';
 import { Logo } from './Logo';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useSession();
+  const { user, loading, validating } = useSession();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
 
   useEffect(() => {
-    if (!loading && !user) router.replace('/tm/login');
-  }, [loading, user, router]);
+    // Only bounce to login once /me has actually settled - redirecting while a
+    // revalidation is still in flight would act on a stale logged-out cache.
+    if (!loading && !validating && !user) router.replace('/tm/login');
+  }, [loading, validating, user, router]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -33,7 +35,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  if (loading || !user) {
+  // Render the shell whenever we have a user, even mid-revalidation, so the periodic
+  // /me refresh never blanks the app.
+  if (!user) {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-4 bg-bg">
         <Logo size="lg" priority className="animate-pulse" />

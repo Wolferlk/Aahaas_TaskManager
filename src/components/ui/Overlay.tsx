@@ -108,7 +108,8 @@ export function OverlayHeader({
 }: {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
-  onClose: () => void;
+  /** Omit to render the header without a close button (e.g. on a standalone page). */
+  onClose?: () => void;
   actions?: React.ReactNode;
 }) {
   return (
@@ -119,13 +120,15 @@ export function OverlayHeader({
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {actions}
-        <button
-          onClick={onClose}
-          className="focus-ring rounded-lg p-2 text-muted hover:bg-line/40 hover:text-ink"
-          aria-label="Close"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="focus-ring rounded-lg p-2 text-muted hover:bg-line/40 hover:text-ink"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </div>
   );

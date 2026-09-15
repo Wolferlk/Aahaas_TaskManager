@@ -9,7 +9,9 @@
     "lint": "next lint",
     "db:inspect": "node scripts/inspect-db.mjs",
     "db:migrate": "node scripts/migrate.mjs",
-    "db:seed": "node scripts/seed.mjs"
+    "db:seed": "node scripts/seed.mjs",
+    "db:migrate:reopened": "node scripts/migrate-reopened-status.mjs",
+    "db:backfill:task-teams": "node scripts/backfill-task-teams.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -6,6 +6,7 @@ import { Plus, FolderKanban, Users as UsersIcon, SquarePen } from 'lucide-react'
 import { fetcher, apiPost, apiPatch, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
+import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Input, Label, Select, Textarea, FieldError } from '@/components/ui/Field';
 import { EmptyState, ProgressBar, Skeleton } from '@/components/ui/Misc';
@@ -152,8 +153,19 @@ function ProjectFormModal({
   const [ownerId, setOwnerId] = useState('');
   const [targetDate, setTargetDate] = useState('');
   const [status, setStatus] = useState('PLANNING');
+  const [memberIds, setMemberIds] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Members live in their own table, so they are fetched with the project
+  // record rather than coming down with the list.
+  const { data: detail } = useSWR<{ members: Array<{ id: number }> }>(
+    open && project ? `/api/tm/projects/${project.id}` : null,
+    fetcher,
+  );
+  useEffect(() => {
+    if (detail?.members) setMemberIds(detail.members.map((m) => m.id));
+  }, [detail]);
 
   // Load the record being edited each time the dialog opens.
   useEffect(() => {
@@ -167,6 +179,7 @@ function ProjectFormModal({
       setOwnerId(project.owner_user_id ? String(project.owner_user_id) : '');
       setTargetDate(toDateInput(project.target_date));
       setStatus(project.status);
+      setMemberIds([]);
     } else {
       setName('');
       setCode('');
@@ -175,6 +188,7 @@ function ProjectFormModal({
       setOwnerId('');
       setTargetDate('');
       setStatus('PLANNING');
+      setMemberIds([]);
     }
   }, [open, project]);
 
@@ -190,6 +204,7 @@ function ProjectFormModal({
       owner_user_id: ownerId ? Number(ownerId) : null,
       target_date: targetDate || null,
       status,
+      member_ids: memberIds,
     };
     try {
       if (isEdit) {
@@ -256,6 +271,32 @@ function ProjectFormModal({
             </Select>
           </div>
         </div>
+        <div>
+          <Label>Members</Label>
+          <div className="max-h-44 space-y-1 overflow-y-auto rounded-xl border border-line p-2">
+            {users.length === 0 && <p className="p-2 text-sm text-muted">No active people to add yet.</p>}
+            {users.map((u) => {
+              const checked = memberIds.includes(u.id);
+              return (
+                <label key={u.id} className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-line/20">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() =>
+                      setMemberIds((prev) => (checked ? prev.filter((x) => x !== u.id) : [...prev, u.id]))
+                    }
+                    className="h-4 w-4 accent-[color:var(--brand,#2563eb)]"
+                  />
+                  <Avatar name={u.full_name} src={u.avatar_url} size="xs" />
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink">{u.full_name}</span>
+                  {u.job_title && <span className="shrink-0 text-xs text-faint">{u.job_title}</span>}
+                </label>
+              );
+            })}
+          </div>
+          <p className="mt-1 text-xs text-muted">{memberIds.length} selected</p>
+        </div>
+
         <FieldError>{error}</FieldError>
         <div className="flex justify-end gap-2 border-t border-line pt-4">
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>

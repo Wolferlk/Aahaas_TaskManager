@@ -5,7 +5,7 @@ import Link from 'next/link';
 import useSWR from 'swr';
 import {
   Calendar, Clock, User, Flag, CheckSquare,
-  Plus, Send, Trash2, Pencil, ExternalLink, AlertCircle, GitBranch, ChevronRight, SquarePen,
+  Plus, Send, Trash2, Pencil, ExternalLink, AlertCircle, GitBranch, ChevronRight, ChevronLeft, SquarePen, UserPlus,
 } from 'lucide-react';
 import { Drawer, OverlayHeader } from '@/components/ui/Overlay';
 import { Button } from '@/components/ui/Button';
@@ -18,6 +18,7 @@ import { fmtDate, fmtDateTime, fmtDueIn, timeAgo } from '@/lib/format';
 import { fetcher, apiPatch, apiPost, ApiClientError } from '@/lib/client';
 import { useToast } from '@/components/ui/Toast';
 import { useSession } from '@/hooks/useSession';
+import { useMeta } from '@/hooks/useMeta';
 import type { TaskStatus } from '@/lib/types';
 import { TaskEditModal, type EditableTask } from './TaskEditModal';
 
@@ -49,7 +50,27 @@ const TABS = [
 ];
 
 export function TaskDrawer({ taskId, onClose, onChanged }: { taskId: number; onClose: () => void; onChanged?: () => void }) {
-  const { data, isLoading, mutate } = useSWR<TaskDetail>(`/api/tm/tasks/${taskId}`, fetcher);
+  return (
+    <Drawer open onClose={onClose} width="max-w-2xl">
+      <TaskDetailContent taskId={taskId} onClose={onClose} onChanged={onChanged} />
+    </Drawer>
+  );
+}
+
+/**
+ * The task detail body, shared by the drawer and the /tm/tasks/[id] full page.
+ * Pass `onClose` for the drawer chrome; omit it for the standalone page.
+ */
+export function TaskDetailContent({
+  taskId,
+  onClose,
+  onChanged,
+}: {
+  taskId: number;
+  onClose?: () => void;
+  onChanged?: () => void;
+}) {
+  const { data, error, isLoading, mutate } = useSWR<TaskDetail>(`/api/tm/tasks/${taskId}`, fetcher);
   const [tab, setTab] = useState('details');
   const [editing, setEditing] = useState(false);
   const toast = useToast();
@@ -80,106 +101,129 @@ export function TaskDrawer({ taskId, onClose, onChanged }: { taskId: number; onC
     }
   };
 
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 p-12 text-center">
+        <AlertCircle className="h-8 w-8 text-faint" />
+        <p className="text-sm font-medium text-ink">
+          {error instanceof ApiClientError && error.status === 404 ? 'Task not found' : 'Could not load this task'}
+        </p>
+        <p className="text-sm text-muted">
+          {error instanceof ApiClientError && error.status === 403
+            ? 'You do not have access to this task.'
+            : 'It may have been deleted, or you may not have access.'}
+        </p>
+        <Link href="/tm/tasks" className="mt-2 text-sm font-medium text-brand hover:underline">
+          Back to tasks
+        </Link>
+      </div>
+    );
+  }
+
+  if (isLoading || !data) {
+    return <div className="p-6"><Skeleton className="h-96" /></div>;
+  }
+
   return (
-    <Drawer open onClose={onClose} width="max-w-2xl">
-      {isLoading || !data ? (
-        <div className="p-6"><Skeleton className="h-96" /></div>
-      ) : (
-        <>
-          <OverlayHeader
-            title={
-              <span className="flex items-center gap-2">
-                <span className="font-mono text-xs text-faint">{data.task.task_number}</span>
-                <StatusBadge status={data.task.status} />
-              </span>
-            }
-            subtitle={
-              <Link href={`/tm/tasks/${data.task.id}`} className="flex items-center gap-1 text-xs text-brand hover:underline">
-                Open full page <ExternalLink className="h-3 w-3" />
-              </Link>
-            }
-            actions={
-              data.can_edit && (
-                <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>
-                  <SquarePen className="h-3.5 w-3.5" /> Edit
-                </Button>
-              )
-            }
-            onClose={onClose}
-          />
+    <>
+      <OverlayHeader
+        title={
+          <span className="flex items-center gap-2">
+            <span className="font-mono text-xs text-faint">{data.task.task_number}</span>
+            <StatusBadge status={data.task.status} />
+          </span>
+        }
+        subtitle={
+          onClose ? (
+            <Link href={`/tm/tasks/${data.task.id}`} className="flex items-center gap-1 text-xs text-brand hover:underline">
+              Open full page <ExternalLink className="h-3 w-3" />
+            </Link>
+          ) : (
+            <Link href="/tm/tasks" className="flex items-center gap-1 text-xs text-brand hover:underline">
+              <ChevronLeft className="h-3 w-3" /> Back to tasks
+            </Link>
+          )
+        }
+        actions={
+          data.can_edit && (
+            <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>
+              <SquarePen className="h-3.5 w-3.5" /> Edit
+            </Button>
+          )
+        }
+        onClose={onClose}
+      />
 
-          <div className="px-6 pt-5">
-            <h2 className="text-lg font-semibold leading-snug text-ink">{data.task.title}</h2>
+      <div className="px-6 pt-5">
+        <h2 className="text-lg font-semibold leading-snug text-ink">{data.task.title}</h2>
 
-            {data.warnings.length > 0 && (
-              <div className="mt-3 flex items-start gap-2 rounded-xl bg-amber-500/10 px-3.5 py-2.5 text-sm text-amber-700 dark:text-amber-400">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>{data.warnings.map((w) => <p key={w}>{w}</p>)}</div>
-              </div>
-            )}
-
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <StatusSelector status={data.task.status} disabled={!data.can_edit && data.task.assignee_id !== user?.id} onChange={updateStatus} />
-              <PriorityBadge priority={data.task.priority as never} />
-              {data.task.deadline && <DeadlinePill deadline={data.task.deadline} />}
-            </div>
-
-            <div className="mt-4">
-              <ProgressBar value={data.task.progress} />
-              <p className="mt-1 text-xs text-muted">{data.task.progress}% complete</p>
-            </div>
-
-            {data.task.status === 'REVIEW' && data.can_approve && (
-              <div className="mt-4 flex gap-2 rounded-xl border border-purple-500/20 bg-purple-500/5 p-3">
-                <Button size="sm" onClick={() => workflow('approve')}>Approve</Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => {
-                    const c = prompt('What needs to change?');
-                    if (c) workflow('reject', c);
-                  }}
-                >
-                  Request changes
-                </Button>
-              </div>
-            )}
+        {data.warnings.length > 0 && (
+          <div className="mt-3 flex items-start gap-2 rounded-xl bg-amber-500/10 px-3.5 py-2.5 text-sm text-amber-700 dark:text-amber-400">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>{data.warnings.map((w) => <p key={w}>{w}</p>)}</div>
           </div>
+        )}
 
-          <div className="sticky top-[73px] z-10 mt-5 border-b border-line bg-elevated px-6">
-            <Tabs
-              tabs={[
-                ...TABS.slice(0, 1),
-                { ...TABS[1], count: data.checklist.length },
-                { ...TABS[2], count: data.comments.length },
-                { ...TABS[3], count: data.activity.length },
-              ]}
-              active={tab}
-              onChange={setTab}
-            />
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <StatusSelector status={data.task.status} disabled={!data.can_edit && data.task.assignee_id !== user?.id} onChange={updateStatus} />
+          <PriorityBadge priority={data.task.priority as never} />
+          {data.task.deadline && <DeadlinePill deadline={data.task.deadline} />}
+        </div>
+
+        <div className="mt-4">
+          <ProgressBar value={data.task.progress} />
+          <p className="mt-1 text-xs text-muted">{data.task.progress}% complete</p>
+        </div>
+
+        {data.task.status === 'REVIEW' && data.can_approve && (
+          <div className="mt-4 flex gap-2 rounded-xl border border-purple-500/20 bg-purple-500/5 p-3">
+            <Button size="sm" onClick={() => workflow('approve')}>Approve</Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                const c = prompt('What needs to change?');
+                if (c) workflow('reject', c);
+              }}
+            >
+              Request changes
+            </Button>
           </div>
+        )}
+      </div>
 
-          <div className="p-6">
-            {tab === 'details' && <DetailsTab data={data} onWorkflow={workflow} onRefresh={refresh} />}
-            {tab === 'checklist' && <ChecklistTab taskId={taskId} checklist={data.checklist} onRefresh={refresh} />}
-            {tab === 'comments' && <CommentsTab taskId={taskId} comments={data.comments} onRefresh={refresh} />}
-            {tab === 'activity' && <ActivityTab activity={data.activity} />}
-          </div>
+      <div className="sticky top-[73px] z-10 mt-5 border-b border-line bg-elevated px-6">
+        <Tabs
+          tabs={[
+            ...TABS.slice(0, 1),
+            { ...TABS[1], count: data.checklist.length },
+            { ...TABS[2], count: data.comments.length },
+            { ...TABS[3], count: data.activity.length },
+          ]}
+          active={tab}
+          onChange={setTab}
+        />
+      </div>
 
-          <TaskEditModal
-            task={data.task as unknown as EditableTask}
-            open={editing}
-            onClose={() => setEditing(false)}
-            onSaved={refresh}
-          />
-        </>
-      )}
-    </Drawer>
+      <div className="p-6">
+        {tab === 'details' && <DetailsTab data={data} onWorkflow={workflow} onRefresh={refresh} />}
+        {tab === 'checklist' && <ChecklistTab taskId={taskId} checklist={data.checklist} onRefresh={refresh} />}
+        {tab === 'comments' && <CommentsTab taskId={taskId} comments={data.comments} onRefresh={refresh} />}
+        {tab === 'activity' && <ActivityTab activity={data.activity} />}
+      </div>
+
+      <TaskEditModal
+        task={data.task as unknown as EditableTask}
+        open={editing}
+        onClose={() => setEditing(false)}
+        onSaved={refresh}
+      />
+    </>
   );
 }
 
 function StatusSelector({ status, disabled, onChange }: { status: TaskStatus; disabled?: boolean; onChange: (s: string) => void }) {
-  const options: TaskStatus[] = ['DRAFT', 'TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'CANCELLED'];
+  const options: TaskStatus[] = ['DRAFT', 'TODO', 'IN_PROGRESS', 'REOPENED', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'CANCELLED'];
   if (disabled) return <StatusBadge status={status} />;
   return (
     <Select value={status} onChange={(e) => onChange(e.target.value)} className="!h-8 !w-auto text-xs">
@@ -287,6 +331,8 @@ function DetailsTab({
 
       <Divider />
 
+      <ReassignmentRequest data={data} onRefresh={onRefresh} />
+
       <div className="flex flex-wrap gap-2">
         {t.status !== 'COMPLETED' && t.status !== 'CANCELLED' && data.can_edit === false && (
           <Button size="sm" variant="secondary" onClick={() => onWorkflow('submit')}>Submit for review</Button>
@@ -297,6 +343,74 @@ function DetailsTab({
         {t.status !== 'CANCELLED' && t.status !== 'COMPLETED' && data.can_edit && (
           <Button size="sm" variant="ghost" className="text-red-500" onClick={() => onWorkflow('cancel')}>Cancel task</Button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * An assignee cannot hand a task over directly - they raise a reassignment
+ * request that a Leader or Manager decides in the Approval Center.
+ */
+function ReassignmentRequest({ data, onRefresh }: { data: TaskDetail; onRefresh: () => void }) {
+  const { user } = useSession();
+  const { users } = useMeta();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState('');
+  const [reason, setReason] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const t = data.task;
+  const canRequest = t.assignee_id === user?.id && t.status !== 'COMPLETED' && t.status !== 'CANCELLED';
+  if (!canRequest) return null;
+
+  const submit = async () => {
+    if (!target || reason.trim().length < 5) {
+      toast({ kind: 'error', title: 'Pick a colleague and explain why.' });
+      return;
+    }
+    setSending(true);
+    try {
+      await apiPost('/api/tm/approvals/request', {
+        kind: 'TASK_REASSIGNMENT',
+        task_id: t.id,
+        new_assignee_id: Number(target),
+        reason: reason.trim(),
+      });
+      toast({ kind: 'success', title: 'Reassignment requested' });
+      setOpen(false);
+      setTarget('');
+      setReason('');
+      onRefresh();
+    } catch (err) {
+      toast({ kind: 'error', title: err instanceof ApiClientError ? err.message : 'Could not send the request' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+        <UserPlus className="h-3.5 w-3.5" /> Request reassignment
+      </Button>
+    );
+  }
+
+  return (
+    <div className="space-y-2 rounded-xl border border-line p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-faint">Request reassignment</p>
+      <Select value={target} onChange={(e) => setTarget(e.target.value)} className="!h-9 text-sm">
+        <option value="">Hand over to…</option>
+        {users.filter((u) => u.id !== user?.id).map((u) => (
+          <option key={u.id} value={u.id}>{u.full_name}</option>
+        ))}
+      </Select>
+      <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="Why should this move?" />
+      <div className="flex gap-2">
+        <Button size="sm" onClick={submit} loading={sending}>Send request</Button>
+        <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
       </div>
     </div>
   );

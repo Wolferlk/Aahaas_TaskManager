@@ -45,7 +45,9 @@ export const signupSchema = z
     confirm_password: z.string(),
     department_id: z.coerce.number().int().positive().nullable().optional(),
     team_id: z.coerce.number().int().positive().nullable().optional(),
-    requested_role: z.enum(['LEADER', 'EMPLOYEE']),
+    // A signup only ever *requests* a role - a Manager grants it in the
+    // Approval Center, which is why MANAGER is offered here too.
+    requested_role: z.enum(['MANAGER', 'LEADER', 'EMPLOYEE']),
     job_title: jobTitle.optional().nullable(),
     employee_code: z.string().trim().max(60).optional().nullable(),
     phone: phoneNumber.optional().nullable(),
@@ -130,7 +132,7 @@ export const taskUpdateSchema = z.object({
   category_id: nullableId,
   priority: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).optional(),
   status: z
-    .enum(['DRAFT', 'TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'])
+    .enum(['DRAFT', 'TODO', 'IN_PROGRESS', 'REOPENED', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'])
     .optional(),
   visibility: z.enum(['PRIVATE', 'TEAM', 'DEPARTMENT', 'MANAGER', 'PUBLIC']).optional(),
   start_date: isoDate,
@@ -319,4 +321,17 @@ export const extensionRequestSchema = z.object({
   task_id: z.coerce.number().int().positive(),
   requested_deadline: z.string().min(1),
   reason: z.string().trim().min(5, 'Explain why the extension is needed.').max(2000),
+});
+
+/** Raised by an assignee who wants their task handed to someone else. */
+export const reassignmentRequestSchema = z.object({
+  task_id: z.coerce.number().int().positive(),
+  new_assignee_id: z.coerce.number().int().positive(),
+  reason: z.string().trim().min(5, 'Explain why this task should be reassigned.').max(2000),
+});
+
+/** Raised by an employee asking to be promoted to Leader. */
+export const leaderRequestSchema = z.object({
+  team_id: z.coerce.number().int().positive().nullable().optional(),
+  reason: z.string().trim().min(5, 'Explain why you should lead this team.').max(2000),
 });

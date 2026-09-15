@@ -10,7 +10,11 @@ export async function GET() {
     const rows = await query(
       `SELECT t.*, d.name AS department_name, d.code AS department_code,
               l.full_name AS leader_name, l.avatar_url AS leader_avatar,
-              (SELECT COUNT(*) FROM tm_users u WHERE u.team_id = t.id AND u.status = 'ACTIVE' AND u.deleted_at IS NULL) AS member_count,
+              (SELECT COUNT(*) FROM tm_users u
+                WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL
+                  AND (u.team_id = t.id
+                       OR EXISTS (SELECT 1 FROM tm_team_members m
+                                   WHERE m.team_id = t.id AND m.user_id = u.id AND m.is_active = 1))) AS member_count,
               (SELECT COUNT(*) FROM tm_tasks tk WHERE tk.team_id = t.id AND tk.deleted_at IS NULL
                  AND tk.status NOT IN ('COMPLETED','CANCELLED')) AS open_tasks,
               (SELECT COUNT(*) FROM tm_tasks tk WHERE tk.team_id = t.id AND tk.deleted_at IS NULL

@@ -2,7 +2,7 @@ export type Role = 'MANAGER' | 'LEADER' | 'EMPLOYEE';
 export type UserStatus = 'PENDING_APPROVAL' | 'ACTIVE' | 'REJECTED' | 'DISABLED';
 export type Priority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 export type TaskStatus =
-  | 'DRAFT' | 'TODO' | 'IN_PROGRESS' | 'BLOCKED' | 'WAITING'
+  | 'DRAFT' | 'TODO' | 'IN_PROGRESS' | 'REOPENED' | 'BLOCKED' | 'WAITING'
   | 'REVIEW' | 'COMPLETED' | 'REJECTED' | 'CANCELLED';
 export type Visibility = 'PRIVATE' | 'TEAM' | 'DEPARTMENT' | 'MANAGER' | 'PUBLIC';
 export type Availability = 'AVAILABLE' | 'BUSY' | 'ON_LEAVE' | 'REMOTE' | 'OFFLINE';
@@ -14,13 +14,13 @@ export type ApprovalType =
 
 export const PRIORITIES: Priority[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 export const TASK_STATUSES: TaskStatus[] = [
-  'DRAFT', 'TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED',
+  'DRAFT', 'TODO', 'IN_PROGRESS', 'REOPENED', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED',
 ];
-export const BOARD_STATUSES: TaskStatus[] = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'REVIEW', 'COMPLETED'];
-export const OPEN_STATUSES: TaskStatus[] = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'REVIEW'];
+export const BOARD_STATUSES: TaskStatus[] = ['TODO', 'IN_PROGRESS', 'REOPENED', 'BLOCKED', 'REVIEW', 'COMPLETED'];
+export const OPEN_STATUSES: TaskStatus[] = ['TODO', 'IN_PROGRESS', 'REOPENED', 'BLOCKED', 'WAITING', 'REVIEW'];
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
-  DRAFT: 'Draft', TODO: 'To Do', IN_PROGRESS: 'In Progress', BLOCKED: 'Blocked',
+  DRAFT: 'Draft', TODO: 'To Do', IN_PROGRESS: 'In Progress', REOPENED: 'Reopened', BLOCKED: 'Blocked',
   WAITING: 'Waiting', REVIEW: 'Review', COMPLETED: 'Completed',
   REJECTED: 'Rejected', CANCELLED: 'Cancelled',
 };

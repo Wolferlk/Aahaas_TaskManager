@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
-import { LogOut, Award, Activity, Pencil, Save, X, Github } from 'lucide-react';
+import { LogOut, Award, Activity, Pencil, Save, X, Github, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { fetcher, apiPost, apiPatch, ApiClientError } from '@/lib/client';
@@ -171,6 +171,8 @@ export default function ProfilePage() {
                 </CardContent>
               </Card>
 
+              <LeaderAccessCard role={data.user.role} />
+
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-1.5">
@@ -224,6 +226,74 @@ export default function ProfilePage() {
         )}
       </PageBody>
     </>
+  );
+}
+
+/**
+ * Employees ask for Leader access here; a Manager decides it in the Approval
+ * Center, which is the only place a role actually changes.
+ */
+function LeaderAccessCard({ role }: { role: string }) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  if (role !== 'EMPLOYEE') return null;
+
+  const submit = async () => {
+    if (reason.trim().length < 5) {
+      toast({ kind: 'error', title: 'Tell your Manager why in a sentence.' });
+      return;
+    }
+    setSending(true);
+    try {
+      await apiPost('/api/tm/approvals/request', { kind: 'LEADER_REQUEST', reason: reason.trim() });
+      toast({ kind: 'success', title: 'Request sent to your Manager' });
+      setSent(true);
+      setOpen(false);
+      setReason('');
+    } catch (err) {
+      toast({ kind: 'error', title: err instanceof ApiClientError ? err.message : 'Could not send the request' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <ShieldCheck className="h-5 w-5 text-muted" />
+            <div>
+              <p className="text-sm font-medium text-ink">Leader access</p>
+              <p className="text-xs text-muted">
+                {sent ? 'Your request is waiting for a Manager.' : 'Ask a Manager to promote you to Leader.'}
+              </p>
+            </div>
+          </div>
+          {!sent && !open && (
+            <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>Request</Button>
+          )}
+        </div>
+
+        {open && (
+          <div className="space-y-2">
+            <Input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Why should you lead your team?"
+            />
+            <div className="flex gap-2">
+              <Button size="sm" onClick={submit} loading={sending}>Send request</Button>
+              <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

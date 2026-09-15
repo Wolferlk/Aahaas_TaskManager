@@ -24,7 +24,7 @@ export async function GET() {
          SUM(deadline < NOW() AND status NOT IN ('COMPLETED','CANCELLED')) AS overdue,
          SUM(status = 'BLOCKED') AS blocked,
          SUM(status = 'REVIEW') AS in_review,
-         SUM(status = 'IN_PROGRESS') AS in_progress,
+         SUM(status IN ('IN_PROGRESS','REOPENED')) AS in_progress,
          SUM(status = 'COMPLETED' AND DATE(completed_at) = CURDATE()) AS completed_today,
          SUM(DATE(created_at) = CURDATE()) AS assigned_today,
          SUM(deadline BETWEEN NOW() AND (NOW() + INTERVAL 7 DAY) AND status NOT IN ('COMPLETED','CANCELLED')) AS due_this_week
@@ -38,7 +38,7 @@ export async function GET() {
         `SELECT ${TASK_FIELDS} FROM tm_tasks t ${TASK_JOINS}
           WHERE t.assignee_id = ? AND t.deleted_at IS NULL
             AND t.status NOT IN ('COMPLETED','CANCELLED')
-            AND (DATE(t.deadline) <= CURDATE() OR t.status = 'IN_PROGRESS')
+            AND (DATE(t.deadline) <= CURDATE() OR t.status IN ('IN_PROGRESS','REOPENED'))
           ORDER BY FIELD(t.priority,'CRITICAL','HIGH','MEDIUM','LOW'), t.deadline
           LIMIT 12`,
         [user.id],
@@ -91,7 +91,7 @@ export async function GET() {
          FROM tm_tasks t
          LEFT JOIN tm_projects p ON p.id = t.project_id
         WHERE t.assignee_id = ? AND t.deleted_at IS NULL
-          AND t.status IN ('TODO','IN_PROGRESS','BLOCKED','WAITING')
+          AND t.status IN ('TODO','IN_PROGRESS','REOPENED','BLOCKED','WAITING')
         LIMIT 100`,
       [user.id],
     );

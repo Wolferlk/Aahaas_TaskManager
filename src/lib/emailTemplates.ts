@@ -28,6 +28,7 @@ function esc(v: unknown): string {
 const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
   COMPLETED: { bg: '#dcfce7', fg: '#15803d' },
   IN_PROGRESS: { bg: '#dbeafe', fg: '#1d4ed8' },
+  REOPENED: { bg: '#e0e7ff', fg: '#4338ca' },
   BLOCKED: { bg: '#fee2e2', fg: '#b91c1c' },
   WAITING: { bg: '#fef3c7', fg: '#b45309' },
   REVIEW: { bg: '#f3e8ff', fg: '#7e22ce' },

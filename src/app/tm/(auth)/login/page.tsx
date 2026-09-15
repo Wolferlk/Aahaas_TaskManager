@@ -25,11 +25,12 @@ export default function LoginPage() {
     setError(null);
     try {
       const res = await apiPost('/api/tm/auth/login', { email, password });
-      refresh();
-      router.push(res.must_change_password ? '/tm/settings?security=1' : res.redirect ?? '/tm/dashboard');
+      // Wait for the session cache to hold the new user before navigating, otherwise the
+      // app shell reads the stale logged-out cache and bounces straight back to /tm/login.
+      await refresh();
+      router.replace(res.must_change_password ? '/tm/settings?security=1' : res.redirect ?? '/tm/dashboard');
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : 'Something went wrong. Please try again.');
-    } finally {
       setPending(false);
     }
   };

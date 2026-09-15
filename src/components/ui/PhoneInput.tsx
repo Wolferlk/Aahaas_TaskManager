@@ -74,12 +74,12 @@ export function PhoneInput({
   const { dial, local } = useMemo(() => splitPhone(value), [value]);
 
   return (
-    <div className="flex gap-2">
+    <div className="flex w-full gap-2">
       <Select
         aria-label="Country code"
         value={dial}
         onChange={(e) => onChange(joinPhone(e.target.value, local))}
-        className="!w-[7.5rem] shrink-0"
+        className="!w-[5.75rem] shrink-0 px-2"
       >
         {COUNTRIES.map((c) => (
           <option key={c.code} value={c.dial}>
@@ -87,6 +87,8 @@ export function PhoneInput({
           </option>
         ))}
       </Select>
+      {/* min-w-0 lets the number field actually shrink to the remaining space
+          instead of overflowing and clipping its own digits. */}
       <Input
         id={id}
         type="tel"
@@ -95,6 +97,7 @@ export function PhoneInput({
         value={local}
         placeholder={placeholder}
         maxLength={15}
+        className="min-w-0 flex-1"
         onChange={(e) => onChange(joinPhone(dial, e.target.value.replace(/\D/g, '')))}
       />
     </div>

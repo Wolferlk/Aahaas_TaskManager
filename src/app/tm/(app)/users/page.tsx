@@ -2,12 +2,12 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import useSWR from 'swr';
-import { Search, Users as UsersIcon, SquarePen, AlertTriangle, ClipboardCheck } from 'lucide-react';
+import { Users as UsersIcon, SquarePen, AlertTriangle, ClipboardCheck, FilterX } from 'lucide-react';
 import Link from 'next/link';
 import { fetcher, apiPatch, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
-import { Input, Label, Select, FieldError } from '@/components/ui/Field';
+import { Input, Label, Select, FieldError, SearchInput } from '@/components/ui/Field';
 import { PhoneInput } from '@/components/ui/PhoneInput';
 import { Button } from '@/components/ui/Button';
 import { Modal, OverlayHeader } from '@/components/ui/Overlay';
@@ -61,6 +61,8 @@ function UsersInner() {
   const [statusFilter, setStatusFilter] = useState('ACTIVE');
   const [editing, setEditing] = useState<UserRow | null>(null);
 
+  const peopleFiltersActive = q !== '' || role !== 'ALL' || departmentId !== '' || statusFilter !== 'ACTIVE';
+
   const params = new URLSearchParams({
     ...(q ? { q } : {}),
     ...(role !== 'ALL' ? { role } : {}),
@@ -75,15 +77,12 @@ function UsersInner() {
       <PageHeader title="People" subtitle="Everyone with access to the Task Management System" />
       <PageBody className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[200px] max-w-xs">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search people..."
-              className="focus-ring h-9 w-full rounded-lg border border-line bg-surface pl-9 pr-3 text-sm placeholder:text-faint"
-            />
-          </div>
+          <SearchInput
+            value={q}
+            onValueChange={setQ}
+            placeholder="Search people..."
+            className="flex-1 min-w-[200px] max-w-xs"
+          />
           <Select value={role} onChange={(e) => setRole(e.target.value)} className="!h-9 !w-auto text-sm">
             <option value="ALL">All roles</option>
             <option value="MANAGER">Manager</option>
@@ -101,6 +100,15 @@ function UsersInner() {
             <option value="REJECTED">Rejected</option>
             <option value="ALL">All statuses</option>
           </Select>
+          {peopleFiltersActive && (
+            <button
+              type="button"
+              onClick={() => { setQ(''); setRole('ALL'); setDepartmentId(''); setStatusFilter('ACTIVE'); }}
+              className="focus-ring flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-muted hover:bg-line/30 hover:text-ink"
+            >
+              <FilterX className="h-3.5 w-3.5" /> Clear filters
+            </button>
+          )}
         </div>
 
         {isLoading && (

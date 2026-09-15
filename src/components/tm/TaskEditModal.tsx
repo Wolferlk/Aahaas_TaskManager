@@ -124,7 +124,7 @@ export function TaskEditModal({
           <div>
             <Label htmlFor="te-status">Status</Label>
             <Select id="te-status" value={form.status} onChange={(e) => set('status', e.target.value)}>
-              {['DRAFT', 'TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'].map((s) => (
+              {['DRAFT', 'TODO', 'IN_PROGRESS', 'REOPENED', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'].map((s) => (
                 <option key={s} value={s}>{s.replace('_', ' ')}</option>
               ))}
             </Select>
