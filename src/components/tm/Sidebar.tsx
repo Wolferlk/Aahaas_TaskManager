@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard, ListChecks, Users, FolderKanban, CalendarClock, BarChart3,
   Trophy, Bell, ShieldCheck, Settings, Building2, UsersRound,
-  ClipboardCheck, NotebookPen, ChevronLeft, ChevronRight, KanbanSquare, LogOut,
+  ClipboardCheck, NotebookPen, ChevronLeft, ChevronRight, KanbanSquare, LogOut, UserCog,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { apiPost } from '@/lib/client';
@@ -27,6 +27,7 @@ const NAV: NavItem[] = [
   { href: '/tm/dashboard', label: 'Overview', icon: LayoutDashboard },
   { href: '/tm/tasks', label: 'My Tasks', icon: ListChecks, match: '/tm/tasks' },
   { href: '/tm/tasks/team', label: 'Team Tasks', icon: UsersRound, leaderPlus: true },
+  { href: '/tm/members', label: 'My People', icon: UserCog, leaderPlus: true },
   { href: '/tm/tasks/board', label: 'Board', icon: KanbanSquare },
   { href: '/tm/projects', label: 'Projects', icon: FolderKanban },
   { href: '/tm/daily-updates', label: 'Daily Updates', icon: NotebookPen },

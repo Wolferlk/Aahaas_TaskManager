@@ -67,8 +67,17 @@ export function TaskListView({
     if (searchParams.get('task')) router.replace(window.location.pathname);
   };
 
+  // A link can narrow the list to one person, e.g. from My People. The prop
+  // still wins, so a page that hard-scopes itself is never overridden by a URL.
+  const urlAssignee = searchParams.get('assignee_id');
+  const assigneeFilter: Record<string, string> =
+    !extraParams?.assignee_id && urlAssignee && Number(urlAssignee) > 0
+      ? { assignee_id: urlAssignee }
+      : {};
+
   const params = new URLSearchParams({
     ...(view ? { view } : {}),
+    ...assigneeFilter,
     ...(status !== 'ALL' ? { status } : {}),
     ...(priority !== 'ALL' ? { priority } : {}),
     ...(q ? { q } : {}),

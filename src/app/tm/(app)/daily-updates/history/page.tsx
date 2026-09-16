@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import useSWR from 'swr';
 import { fetcher } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
@@ -94,10 +95,16 @@ function Section({ title, body }: { title: string; body: string | null }) {
  * Manager adds everyone. The server re-checks all of it — this only keeps the
  * UI from offering a view that would come back refused.
  */
-export default function DailyUpdateHistoryPage() {
+function DailyUpdateHistoryInner() {
   const { user } = useSession();
+  const searchParams = useSearchParams();
   const [scope, setScope] = useState<'mine' | 'team'>('mine');
-  const [person, setPerson] = useState('');
+  // Arriving from a person's page in My People opens straight on them, rather
+  // than on "mine" with their name buried in the picker.
+  const [person, setPerson] = useState(() => {
+    const requested = Number(searchParams.get('user'));
+    return Number.isFinite(requested) && requested > 0 ? String(requested) : '';
+  });
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
@@ -321,5 +328,13 @@ export default function DailyUpdateHistoryPage() {
         </div>
       </PageBody>
     </>
+  );
+}
+
+export default function DailyUpdateHistoryPage() {
+  return (
+    <Suspense fallback={null}>
+      <DailyUpdateHistoryInner />
+    </Suspense>
   );
 }

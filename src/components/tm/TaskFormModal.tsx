@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 import { Modal, OverlayHeader } from '@/components/ui/Overlay';
 import { Button } from '@/components/ui/Button';
 import { Input, Label, Select, Textarea, FieldError } from '@/components/ui/Field';
+import { Avatar } from '@/components/ui/Avatar';
 import { useMeta } from '@/hooks/useMeta';
 import { useSession } from '@/hooks/useSession';
 import { apiPost, ApiClientError } from '@/lib/client';
@@ -15,11 +16,25 @@ export function TaskFormModal({
   onClose,
   onCreated,
   defaults,
+  lockAssignee,
+  title: modalTitle,
+  subtitle: modalSubtitle,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated?: (id: number) => void;
-  defaults?: { project_id?: number; team_id?: number; parent_task_id?: number; status?: string };
+  defaults?: {
+    project_id?: number;
+    team_id?: number;
+    parent_task_id?: number;
+    status?: string;
+    assignee_id?: number;
+    assignee_name?: string;
+  };
+  /** Pins the task to `defaults.assignee_id` — used when assigning from someone's own page. */
+  lockAssignee?: boolean;
+  title?: string;
+  subtitle?: string;
 }) {
   const { users, projects, activeDepartments, activeTeams, categories } = useMeta();
   const { user } = useSession();
@@ -45,12 +60,16 @@ export function TaskFormModal({
   // Every task belongs to somebody. Unless another name is picked the creator
   // owns it, so it lands in a real "My Tasks" list rather than nowhere.
   useEffect(() => {
+    if (defaults?.assignee_id) {
+      setAssigneeId(String(defaults.assignee_id));
+      return;
+    }
     if (user && !assigneeId) setAssigneeId(String(user.id));
-  }, [user, assigneeId]);
+  }, [user, assigneeId, defaults?.assignee_id]);
 
   const reset = () => {
     setTitle('');
-    setAssigneeId(user ? String(user.id) : '');
+    setAssigneeId(defaults?.assignee_id ? String(defaults.assignee_id) : user ? String(user.id) : '');
     setDeadline('');
     setPriority('MEDIUM');
     setExpanded(false);
@@ -113,10 +132,18 @@ export function TaskFormModal({
   };
 
   const assignableUsers = users;
+  const lockedName =
+    defaults?.assignee_name ??
+    users.find((u) => u.id === defaults?.assignee_id)?.full_name ??
+    'this person';
 
   return (
-    <Modal open={open} onClose={close} className="max-w-lg" title="Create task">
-      <OverlayHeader title="New Task" subtitle="Quick add — expand for full details" onClose={close} />
+    <Modal open={open} onClose={close} className="max-w-lg" title={modalTitle ?? 'Create task'}>
+      <OverlayHeader
+        title={modalTitle ?? 'New Task'}
+        subtitle={modalSubtitle ?? 'Quick add — expand for full details'}
+        onClose={close}
+      />
       <form onSubmit={submit} className="space-y-4 p-6">
         <div>
           <Label htmlFor="qa-title">Title</Label>
@@ -133,16 +160,25 @@ export function TaskFormModal({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label htmlFor="qa-assignee">Assignee</Label>
-            <Select id="qa-assignee" required value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}>
-              <option value={String(user?.id ?? '')}>Myself</option>
-              {assignableUsers
-                .filter((u) => u.id !== user?.id)
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.full_name}
-                  </option>
-                ))}
-            </Select>
+            {lockAssignee && defaults?.assignee_id ? (
+              /* Assigning from someone's own workload page — the target is the
+                 point of the action, so it is shown rather than re-chosen. */
+              <div className="flex h-10 items-center gap-2 rounded-xl border border-line bg-elevated px-3.5 text-sm text-ink">
+                <Avatar name={lockedName} size="xs" />
+                <span className="truncate">{lockedName}</span>
+              </div>
+            ) : (
+              <Select id="qa-assignee" required value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}>
+                <option value={String(user?.id ?? '')}>Myself</option>
+                {assignableUsers
+                  .filter((u) => u.id !== user?.id)
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.full_name}
+                    </option>
+                  ))}
+              </Select>
+            )}
           </div>
           <div>
             <Label htmlFor="qa-priority">Priority</Label>
