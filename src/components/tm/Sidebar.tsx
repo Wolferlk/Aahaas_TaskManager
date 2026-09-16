@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard, ListChecks, Users, FolderKanban, CalendarClock, BarChart3,
-  Trophy, Bell, ShieldCheck, Settings, Building2, UsersRound,
+  Bell, ShieldCheck, Settings, Building2, UsersRound,
   ClipboardCheck, NotebookPen, ChevronLeft, ChevronRight, KanbanSquare, LogOut, UserCog,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
@@ -35,7 +35,6 @@ const NAV: NavItem[] = [
   { href: '/tm/approvals', label: 'Approvals', icon: ClipboardCheck, leaderPlus: true },
   { href: '/tm/reports', label: 'Reports', icon: BarChart3, leaderPlus: true },
   { href: '/tm/performance', label: 'Performance', icon: ShieldCheck },
-  { href: '/tm/rewards', label: 'Rewards', icon: Trophy },
   { href: '/tm/notifications', label: 'Notifications', icon: Bell },
 ];
 
