@@ -14,7 +14,7 @@ import { EmailSettings } from '@/components/tm/settings/EmailSettings';
 import { GithubSettings } from '@/components/tm/settings/GithubSettings';
 import { AutoSubmitSettings } from '@/components/tm/settings/AutoSubmitSettings';
 import { DailyMailRoutes } from '@/components/tm/settings/DailyMailRoutes';
-import { AppDataReset } from '@/components/tm/settings/AppDataReset';
+import { AppDataReset } from '@/components/tm/admin/AppDataReset';
 import { useTheme } from '@/hooks/useTheme';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/components/ui/Toast';
