@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { execute, queryOne } from '@/lib/db';
+import { execute, query, queryOne } from '@/lib/db';
 import { audit, notFound, parseBody, requirePermission, toErrorResponse } from '@/lib/api';
 import { departmentSchema } from '@/lib/validation';
 
@@ -39,19 +39,45 @@ export async function DELETE(_req: Request, { params }: Ctx) {
     const user = await requirePermission('tm.department.manage');
     const id = Number((await params).id);
 
-    const inUse = await queryOne<{ c: number }>(
+    const department = await queryOne<{ name: string }>(
+      'SELECT name FROM tm_departments WHERE id = ? AND deleted_at IS NULL',
+      [id],
+    );
+    if (!department) throw notFound('Department not found.');
+
+    const people = await queryOne<{ c: number }>(
       'SELECT COUNT(*) AS c FROM tm_users WHERE department_id = ? AND deleted_at IS NULL',
       [id],
     );
-    if (Number(inUse?.c ?? 0) > 0) {
+    const peopleCount = Number(people?.c ?? 0);
+    if (peopleCount > 0) {
       return NextResponse.json(
-        { error: 'Move the people in this department first, then disable it.' },
+        {
+          error: `${department.name}: ${peopleCount} ${peopleCount === 1 ? 'person is' : 'people are'} still in this department. Move them first.`,
+          code: 'DEPARTMENT_NOT_EMPTY',
+        },
+        { status: 409 },
+      );
+    }
+
+    // A department with no people can still own teams, and a team cannot exist
+    // without one — tm_teams.department_id is NOT NULL.
+    const teams = await query<{ name: string }>(
+      'SELECT name FROM tm_teams WHERE department_id = ? AND deleted_at IS NULL',
+      [id],
+    );
+    if (teams.length) {
+      return NextResponse.json(
+        {
+          error: `${department.name} still owns ${teams.map((t) => t.name).join(', ')}. Delete or move ${teams.length === 1 ? 'that team' : 'those teams'} first.`,
+          code: 'DEPARTMENT_HAS_TEAMS',
+        },
         { status: 409 },
       );
     }
 
     await execute("UPDATE tm_departments SET deleted_at = NOW(), status = 'DISABLED' WHERE id = ?", [id]);
-    await audit(user.id, 'DEPARTMENT_DISABLED', 'DEPARTMENT', id);
+    await audit(user.id, 'DEPARTMENT_DELETED', 'DEPARTMENT', id, department, null);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return toErrorResponse(err);

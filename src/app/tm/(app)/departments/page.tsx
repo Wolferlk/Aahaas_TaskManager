@@ -2,14 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
-import { Plus, Building2, SquarePen } from 'lucide-react';
-import { fetcher, apiPost, apiPatch, ApiClientError } from '@/lib/client';
+import { Plus, Building2, SquarePen, Trash2, X } from 'lucide-react';
+import { fetcher, apiPost, apiPatch, apiDelete, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Label, Select, Textarea, FieldError } from '@/components/ui/Field';
 import { EmptyState, Skeleton } from '@/components/ui/Misc';
 import { Modal, OverlayHeader } from '@/components/ui/Overlay';
+import { DeleteButton } from '@/components/tm/DeleteButton';
 import { useMeta } from '@/hooks/useMeta';
 import { useToast } from '@/components/ui/Toast';
 
@@ -30,6 +31,54 @@ export default function DepartmentsPage() {
   const { data, isLoading, mutate } = useSWR<{ departments: Department[] }>('/api/tm/departments', fetcher);
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Department | null>(null);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [deleting, setDeleting] = useState(false);
+  // One refusal per department, kept on screen: a bulk delete where three
+  // succeed and one is blocked has to say which one, and why.
+  const [blocked, setBlocked] = useState<string[]>([]);
+  const toast = useToast();
+
+  const toggle = (id: number) =>
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const clearSelection = () => {
+    setSelected([]);
+    setBlocked([]);
+  };
+
+  // Sequential rather than parallel: each delete re-reads the department's
+  // people and teams, and the messages read in a predictable order.
+  const deleteSelected = async () => {
+    setDeleting(true);
+    const failures: string[] = [];
+    const failedIds: number[] = [];
+    let done = 0;
+    for (const id of selected) {
+      try {
+        await apiDelete(`/api/tm/departments/${id}`);
+        done++;
+      } catch (err) {
+        const name = data?.departments.find((d) => d.id === id)?.name ?? `Department ${id}`;
+        failures.push(err instanceof ApiClientError ? err.message : `${name} could not be deleted.`);
+        failedIds.push(id);
+      }
+    }
+    setDeleting(false);
+    setBlocked(failures);
+    // The ones that were deleted drop out of the selection; the blocked ones
+    // stay ticked, next to the reason they are still there.
+    setSelected(failedIds);
+    mutate();
+    if (done) {
+      toast({
+        kind: failures.length ? 'info' : 'success',
+        title: `${done} ${done === 1 ? 'department' : 'departments'} deleted`,
+        description: failures.length ? `${failures.length} could not be deleted.` : undefined,
+      });
+    } else if (failures.length) {
+      toast({ kind: 'error', title: 'Nothing was deleted' });
+    }
+  };
 
   return (
     <>
@@ -45,12 +94,47 @@ export default function DepartmentsPage() {
           </div>
         )}
         {data && data.departments.length === 0 && <EmptyState icon={Building2} title="No departments yet" />}
+
+        {(selected.length > 0 || blocked.length > 0) && (
+          <div className="mb-4 rounded-xl border border-line bg-elevated px-4 py-3">
+            {selected.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm text-ink">
+                  {selected.length} {selected.length === 1 ? 'department' : 'departments'} selected
+                </p>
+                <div className="ml-auto flex items-center gap-2">
+                  <Button size="sm" variant="ghost" onClick={clearSelection} disabled={deleting}>
+                    <X className="h-3.5 w-3.5" /> Clear
+                  </Button>
+                  <Button size="sm" variant="danger" loading={deleting} onClick={deleteSelected}>
+                    <Trash2 className="h-3.5 w-3.5" /> Delete selected
+                  </Button>
+                </div>
+              </div>
+            )}
+            {blocked.length > 0 && (
+              <ul className="mt-2 space-y-1 text-sm text-amber-700 dark:text-amber-400">
+                {blocked.map((b) => <li key={b}>{b}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {data?.departments.map((d) => (
             <Card key={d.id} className="animate-fade-up">
               <CardContent className="p-5">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="min-w-0 truncate text-sm font-semibold text-ink">{d.name}</p>
+                  <label className="flex min-w-0 flex-1 items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(d.id)}
+                      onChange={() => toggle(d.id)}
+                      className="focus-ring h-4 w-4 shrink-0 accent-[color:var(--brand,#e11d48)]"
+                      aria-label={`Select ${d.name}`}
+                    />
+                    <span className="min-w-0 truncate text-sm font-semibold text-ink">{d.name}</span>
+                  </label>
                   <div className="flex shrink-0 items-center gap-1">
                     <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${d.status === 'ACTIVE' ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400' : 'bg-line/50 text-muted'}`}>
                       {d.status}
@@ -151,6 +235,21 @@ function DepartmentFormModal({
     }
   };
 
+  // Same endpoint the bulk action uses; its refusal names the people or teams
+  // still attached, so it is shown as it comes back.
+  const remove = async () => {
+    if (!department) return;
+    setError(null);
+    try {
+      await apiDelete(`/api/tm/departments/${department.id}`);
+      toast({ kind: 'success', title: `${department.name} deleted` });
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Could not delete the department.');
+    }
+  };
+
   return (
     <Modal open={open} onClose={onClose} title={isEdit ? 'Edit department' : 'New department'}>
       <OverlayHeader title={isEdit ? `Edit ${department!.name}` : 'New Department'} onClose={onClose} />
@@ -186,9 +285,21 @@ function DepartmentFormModal({
           </div>
         </div>
         <FieldError>{error}</FieldError>
-        <div className="flex justify-end gap-2 border-t border-line pt-4">
-          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button type="submit" loading={saving}>{isEdit ? 'Save changes' : 'Create Department'}</Button>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-4">
+          <div>
+            {isEdit && (
+              <DeleteButton
+                label="Delete department"
+                question={`Delete ${department!.name}?`}
+                disabled={saving}
+                onDelete={remove}
+              />
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button type="submit" loading={saving}>{isEdit ? 'Save changes' : 'Create Department'}</Button>
+          </div>
         </div>
       </form>
     </Modal>

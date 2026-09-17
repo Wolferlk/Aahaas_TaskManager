@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import useSWR from 'swr';
-import { Users as UsersIcon, SquarePen, AlertTriangle, ClipboardCheck, FilterX } from 'lucide-react';
+import { Users as UsersIcon, SquarePen, AlertTriangle, ClipboardCheck, FilterX, Trash2, X } from 'lucide-react';
 import Link from 'next/link';
 import { fetcher, apiPatch, apiDelete, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
@@ -54,13 +54,63 @@ const AVAILABILITY_STYLE: Record<string, string> = {
 };
 
 function UsersInner() {
-  const { can } = useSession();
+  const { can, user: me } = useSession();
   const { departments, activeDepartments } = useMeta();
+  const toast = useToast();
   const [q, setQ] = useState('');
   const [role, setRole] = useState('ALL');
   const [departmentId, setDepartmentId] = useState('');
   const [statusFilter, setStatusFilter] = useState('ACTIVE');
   const [editing, setEditing] = useState<UserRow | null>(null);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [deleting, setDeleting] = useState(false);
+  // Refusals stay on screen: a batch where two go and one is blocked has to say
+  // which person is still there, and what is holding them.
+  const [blocked, setBlocked] = useState<string[]>([]);
+
+  // Only a Manager can delete, and never their own account, so the tick boxes
+  // appear for nobody else.
+  const canDelete = me?.role === 'MANAGER';
+
+  const toggle = (id: number) =>
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const clearSelection = () => {
+    setSelected([]);
+    setBlocked([]);
+  };
+
+  // Sequential: each delete re-checks open tasks, team leadership and the
+  // last-Manager rule against the state the previous one left behind.
+  const deleteSelected = async () => {
+    setDeleting(true);
+    const failures: string[] = [];
+    const failedIds: number[] = [];
+    let done = 0;
+    for (const id of selected) {
+      try {
+        await apiDelete(`/api/tm/users/${id}`);
+        done++;
+      } catch (err) {
+        const name = data?.users.find((u) => u.id === id)?.full_name ?? `Person ${id}`;
+        failures.push(err instanceof ApiClientError ? err.message : `${name} could not be deleted.`);
+        failedIds.push(id);
+      }
+    }
+    setDeleting(false);
+    setBlocked(failures);
+    setSelected(failedIds);
+    mutate();
+    if (done) {
+      toast({
+        kind: failures.length ? 'info' : 'success',
+        title: `${done} ${done === 1 ? 'person' : 'people'} deleted`,
+        description: failures.length ? `${failures.length} could not be deleted.` : undefined,
+      });
+    } else if (failures.length) {
+      toast({ kind: 'error', title: 'Nobody was deleted' });
+    }
+  };
 
   const peopleFiltersActive = q !== '' || role !== 'ALL' || departmentId !== '' || statusFilter !== 'ACTIVE';
 
@@ -112,6 +162,31 @@ function UsersInner() {
           )}
         </div>
 
+        {(selected.length > 0 || blocked.length > 0) && (
+          <div className="rounded-xl border border-line bg-elevated px-4 py-3">
+            {selected.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm text-ink">
+                  {selected.length} {selected.length === 1 ? 'person' : 'people'} selected
+                </p>
+                <div className="ml-auto flex items-center gap-2">
+                  <Button size="sm" variant="ghost" onClick={clearSelection} disabled={deleting}>
+                    <X className="h-3.5 w-3.5" /> Clear
+                  </Button>
+                  <Button size="sm" variant="danger" loading={deleting} onClick={deleteSelected}>
+                    <Trash2 className="h-3.5 w-3.5" /> Delete selected
+                  </Button>
+                </div>
+              </div>
+            )}
+            {blocked.length > 0 && (
+              <ul className="mt-2 space-y-1 text-sm text-amber-700 dark:text-amber-400">
+                {blocked.map((b) => <li key={b}>{b}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
+
         {isLoading && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-28" />)}
@@ -154,6 +229,15 @@ function UsersInner() {
             <Card key={u.id} className="animate-fade-up">
               <CardContent className="p-4">
                 <div className="flex items-start gap-3">
+                  {canDelete && u.id !== me?.id && (
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(u.id)}
+                      onChange={() => toggle(u.id)}
+                      className="focus-ring mt-1 h-4 w-4 shrink-0 accent-[color:var(--brand,#e11d48)]"
+                      aria-label={`Select ${u.full_name}`}
+                    />
+                  )}
                   <div className="relative">
                     <Avatar name={u.full_name} src={u.avatar_url} size="md" />
                     <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-surface ${AVAILABILITY_STYLE[u.availability]}`} />
