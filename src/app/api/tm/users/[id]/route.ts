@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { execute, query, queryOne } from '@/lib/db';
-import { audit, forbidden, notFound, parseBody, requireUser, toErrorResponse } from '@/lib/api';
+import { audit, badRequest, forbidden, notFound, parseBody, requireUser, toErrorResponse } from '@/lib/api';
 import { userUpdateSchema } from '@/lib/validation';
 import { notify } from '@/lib/notifications';
 import { computeMetrics, getWeights, scoreFromMetrics } from '@/lib/performance';
@@ -131,6 +131,98 @@ export async function PATCH(req: Request, { params }: Ctx) {
     }
     await audit(me.id, 'USER_UPDATED', 'USER', id, { role: before.role, status: before.status }, body);
 
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
+
+/**
+ * Soft delete of a person. Manager-only.
+ *
+ * The row stays so every task, comment and audit entry they ever touched still
+ * resolves to a name — only their access ends. Four things block a delete, and
+ * each one says what to do about it rather than failing vaguely:
+ * deleting yourself, removing the last Manager, leaving open work unassigned,
+ * and leaving a team without its Leader.
+ *
+ * Their email address is released (kept, prefixed, in the audit trail) so the
+ * same person can be re-registered later — signup rejects an address that is
+ * still on any row, deleted or not.
+ */
+export async function DELETE(_req: Request, { params }: Ctx) {
+  try {
+    const me = await requireUser();
+    if (me.role !== 'MANAGER') throw forbidden('Only a Manager can delete a person.');
+
+    const id = Number((await params).id);
+    if (id === me.id) throw badRequest('You cannot delete your own account.');
+
+    const person = await queryOne<{ full_name: string; email: string; role: string }>(
+      'SELECT full_name, email, role FROM tm_users WHERE id = ? AND deleted_at IS NULL',
+      [id],
+    );
+    if (!person) throw notFound('That person could not be found.');
+
+    if (person.role === 'MANAGER') {
+      const others = await queryOne<{ c: number }>(
+        "SELECT COUNT(*) AS c FROM tm_users WHERE role = 'MANAGER' AND status = 'ACTIVE' AND deleted_at IS NULL AND id <> ?",
+        [id],
+      );
+      if (Number(others?.c ?? 0) === 0) {
+        return NextResponse.json(
+          { error: 'This is the last active Manager account. Promote someone else first.' },
+          { status: 409 },
+        );
+      }
+    }
+
+    const open = await queryOne<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM tm_tasks
+        WHERE assignee_id = ? AND deleted_at IS NULL AND status NOT IN ('COMPLETED','CANCELLED')`,
+      [id],
+    );
+    const openCount = Number(open?.c ?? 0);
+    if (openCount > 0) {
+      return NextResponse.json(
+        {
+          error: `${person.full_name} still has ${openCount} open ${openCount === 1 ? 'task' : 'tasks'}. Reassign them first.`,
+        },
+        { status: 409 },
+      );
+    }
+
+    const leads = await query<{ name: string }>(
+      'SELECT name FROM tm_teams WHERE leader_user_id = ? AND deleted_at IS NULL',
+      [id],
+    );
+    if (leads.length) {
+      return NextResponse.json(
+        {
+          error: `${person.full_name} leads ${leads.map((t) => t.name).join(', ')}. Assign a new Leader first.`,
+        },
+        { status: 409 },
+      );
+    }
+
+    // Prefixed rather than blanked: still readable in an export, no longer in
+    // the way of a future signup, and the original is in the audit entry below.
+    const released = `deleted+${id}+${person.email}`.slice(0, 190);
+
+    await execute(
+      `UPDATE tm_users
+          SET deleted_at = NOW(), status = 'DISABLED', email = ?, team_id = NULL
+        WHERE id = ?`,
+      [released, id],
+    );
+    // Any browser they are signed in on stops working on the next request.
+    await execute('UPDATE tm_user_sessions SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL', [id]);
+    await execute(
+      'UPDATE tm_team_members SET left_at = NOW(), is_active = 0 WHERE user_id = ? AND is_active = 1',
+      [id],
+    );
+
+    await audit(me.id, 'USER_DELETED', 'USER', id, person, null);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return toErrorResponse(err);

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import { Plus, UsersRound, AlertTriangle, SquarePen, UserPlus, UserMinus, Users } from 'lucide-react';
-import { fetcher, apiPost, apiPatch, apiPut, ApiClientError } from '@/lib/client';
+import { fetcher, apiPost, apiPatch, apiPut, apiDelete, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -11,6 +11,7 @@ import { Input, Label, Select, Textarea, FieldError } from '@/components/ui/Fiel
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState, Skeleton } from '@/components/ui/Misc';
 import { Modal, OverlayHeader } from '@/components/ui/Overlay';
+import { DeleteButton } from '@/components/tm/DeleteButton';
 import { useMeta } from '@/hooks/useMeta';
 import { useToast } from '@/components/ui/Toast';
 
@@ -276,6 +277,7 @@ function TeamFormModal({
   const [status, setStatus] = useState('ACTIVE');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [blocking, setBlocking] = useState<string | null>(null);
 
   // Temporary: teams can only be created under the IT department.
   const itDepartment = activeDepartments.find(
@@ -297,6 +299,7 @@ function TeamFormModal({
     setLeaderId(team?.leader_user_id ? String(team.leader_user_id) : '');
     setDescription(team?.description ?? '');
     setStatus(team?.status ?? 'ACTIVE');
+    setBlocking(null);
   }, [open, team, itDepartment]);
 
   const submit = async (e: React.FormEvent) => {
@@ -326,6 +329,27 @@ function TeamFormModal({
       setError(err instanceof ApiClientError ? err.message : 'Could not save the team.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // A team that still holds people is refused on the first attempt. Rather than
+  // making someone empty it by hand, the refusal names the count and offers to
+  // take them out as part of the delete.
+  const remove = async (force = false) => {
+    if (!team) return;
+    setError(null);
+    try {
+      await apiDelete(`/api/tm/teams/${team.id}${force ? '?force=1' : ''}`);
+      toast({ kind: 'success', title: `${team.name} deleted` });
+      setBlocking(null);
+      onSaved();
+      onClose();
+    } catch (err) {
+      if (err instanceof ApiClientError && err.code === 'TEAM_NOT_EMPTY') {
+        setBlocking(err.message);
+        return;
+      }
+      setError(err instanceof ApiClientError ? err.message : 'Could not delete the team.');
     }
   };
 
@@ -378,9 +402,31 @@ function TeamFormModal({
           <Textarea id="t-desc" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
         <FieldError>{error}</FieldError>
-        <div className="flex justify-end gap-2 border-t border-line pt-4">
-          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button type="submit" loading={saving}>{isEdit ? 'Save changes' : 'Create Team'}</Button>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-4">
+          {/* Delete sits opposite Save so it is never the button next to Cancel. */}
+          <div>
+            {isEdit && !blocking && (
+              <DeleteButton
+                label="Delete team"
+                question={`Delete ${team!.name}?`}
+                disabled={saving}
+                onDelete={() => remove()}
+              />
+            )}
+            {isEdit && blocking && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-amber-600 dark:text-amber-400">{blocking}</span>
+                <Button type="button" variant="ghost" onClick={() => setBlocking(null)}>Keep team</Button>
+                <Button type="button" variant="danger" size="sm" onClick={() => remove(true)}>
+                  Remove them and delete
+                </Button>
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button type="submit" loading={saving}>{isEdit ? 'Save changes' : 'Create Team'}</Button>
+          </div>
         </div>
       </form>
     </Modal>

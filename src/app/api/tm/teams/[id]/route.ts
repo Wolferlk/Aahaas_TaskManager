@@ -165,3 +165,62 @@ export async function PUT(req: Request, { params }: Ctx) {
     return toErrorResponse(err);
   }
 }
+
+/**
+ * Soft delete. The row keeps its history — task and membership records still
+ * join to it — but the team disappears from every picker and roster.
+ *
+ * A team holding people is never removed silently: move them out first, so
+ * nobody is left pointing at a team that no longer exists.
+ */
+export async function DELETE(req: Request, { params }: Ctx) {
+  try {
+    const user = await requirePermission('tm.team.manage');
+    const id = Number((await params).id);
+
+    const team = await queryOne<{ name: string }>(
+      'SELECT name FROM tm_teams WHERE id = ? AND deleted_at IS NULL',
+      [id],
+    );
+    if (!team) throw notFound('Team not found.');
+
+    // Primary team and membership rows both count as "still in this team".
+    const inUse = await queryOne<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM tm_users u
+        WHERE u.deleted_at IS NULL
+          AND (u.team_id = ?
+               OR EXISTS (SELECT 1 FROM tm_team_members m
+                           WHERE m.team_id = ? AND m.user_id = u.id AND m.is_active = 1))`,
+      [id, id],
+    );
+    const count = Number(inUse?.c ?? 0);
+    const force = new URL(req.url).searchParams.get('force') === '1';
+    if (count > 0 && !force) {
+      return NextResponse.json(
+        {
+          error: `${count} ${count === 1 ? 'person is' : 'people are'} still in this team.`,
+          code: 'TEAM_NOT_EMPTY',
+          members: count,
+        },
+        { status: 409 },
+      );
+    }
+
+    // force=1 is the "remove them and delete anyway" path. Membership rows are
+    // closed rather than deleted, so who was in the team and when is still on
+    // record; only the live link is cut.
+    if (count > 0) {
+      await execute('UPDATE tm_users SET team_id = NULL WHERE team_id = ?', [id]);
+      await execute(
+        'UPDATE tm_team_members SET left_at = NOW(), is_active = 0 WHERE team_id = ? AND is_active = 1',
+        [id],
+      );
+    }
+
+    await execute("UPDATE tm_teams SET deleted_at = NOW(), status = 'DISABLED' WHERE id = ?", [id]);
+    await audit(user.id, 'TEAM_DELETED', 'TEAM', id, { ...team, members_detached: count }, null);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}

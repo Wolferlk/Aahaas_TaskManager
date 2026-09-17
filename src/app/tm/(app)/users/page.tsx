@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import useSWR from 'swr';
 import { Users as UsersIcon, SquarePen, AlertTriangle, ClipboardCheck, FilterX } from 'lucide-react';
 import Link from 'next/link';
-import { fetcher, apiPatch, ApiClientError } from '@/lib/client';
+import { fetcher, apiPatch, apiDelete, ApiClientError } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Input, Label, Select, FieldError, SearchInput } from '@/components/ui/Field';
@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button';
 import { Modal, OverlayHeader } from '@/components/ui/Overlay';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState, Skeleton } from '@/components/ui/Misc';
+import { DeleteButton } from '@/components/tm/DeleteButton';
 import { useSession } from '@/hooks/useSession';
 import { useMeta } from '@/hooks/useMeta';
 import { useToast } from '@/components/ui/Toast';
@@ -217,6 +218,7 @@ function UserEditModal({
   onSaved: () => void;
 }) {
   const { departments, teams, activeDepartments, activeTeams } = useMeta();
+  const { user: me } = useSession();
   const toast = useToast();
 
   const [fullName, setFullName] = useState('');
@@ -273,7 +275,24 @@ function UserEditModal({
     }
   };
 
+  // Open tasks, team leadership and the last-Manager rule are all enforced by
+  // the API; its message names the blocker, so it is shown as it comes back.
+  const remove = async () => {
+    if (!user) return;
+    setError(null);
+    try {
+      await apiDelete(`/api/tm/users/${user.id}`);
+      toast({ kind: 'success', title: `${user.full_name} deleted` });
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Could not delete this person.');
+    }
+  };
+
   if (!user) return null;
+
+  const isSelf = me?.id === user.id;
 
   // A person already sitting in a disabled department or team keeps seeing it,
   // so saving an unrelated field does not silently move them out of it.
@@ -347,9 +366,22 @@ function UserEditModal({
 
         <FieldError>{error}</FieldError>
 
-        <div className="flex justify-end gap-2 border-t border-line pt-4">
-          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button type="submit" loading={saving}>Save changes</Button>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-4">
+          {/* Deleting yourself is refused by the API; the control is hidden too. */}
+          <div>
+            {!isSelf && (
+              <DeleteButton
+                label="Delete person"
+                question={`Delete ${user.full_name}?`}
+                disabled={saving}
+                onDelete={remove}
+              />
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button type="submit" loading={saving}>Save changes</Button>
+          </div>
         </div>
       </form>
     </Modal>
