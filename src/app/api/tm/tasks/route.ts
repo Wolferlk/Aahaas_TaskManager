@@ -12,8 +12,15 @@ import {
   toErrorResponse,
 } from '@/lib/api';
 import { taskCreateSchema } from '@/lib/validation';
-import { logActivity, logStatusChange, nextTaskNumber, taskMemberScopeCheck, taskScope } from '@/lib/tasks';
-import { notify } from '@/lib/notifications';
+import {
+  logActivity,
+  logStatusChange,
+  nextTaskNumber,
+  refreshProjectProgress,
+  taskMemberScopeCheck,
+  taskScope,
+} from '@/lib/tasks';
+import { notify, notifyMany, taskStakeholderIds } from '@/lib/notifications';
 
 const SORTABLE: Record<string, string> = {
   created_at: 't.created_at',
@@ -350,6 +357,35 @@ export async function POST(req: Request) {
         priority: body.priority === 'CRITICAL' ? 'HIGH' : 'NORMAL',
       });
     }
+    // Raising a task is reported upwards the same way a status move is.
+    // Without this, work an Employee created for themselves reached nobody:
+    // the Manager only ever learned of it by going looking for it, which is
+    // exactly the complaint that it "never appears in the portal".
+    if (!body.is_personal) {
+      const departmentId = body.department_id ?? user.department_id ?? null;
+      const supervisors = (
+        await taskStakeholderIds({
+          created_by: user.id,
+          team_id: body.is_personal ? null : resolvedTeamId,
+          department_id: departmentId,
+        })
+      ).filter((uid) => uid !== user.id && uid !== assigneeId);
+
+      await notifyMany(supervisors, {
+        type: 'TASK_CREATED',
+        title: `New task: ${body.title}`,
+        body: `${user.full_name} raised ${created?.task_number}${
+          assigneeId !== user.id ? '' : ' for themselves'
+        }.`,
+        link: `/tm/tasks?task=${taskId}`,
+        entityType: 'TASK',
+        entityId: taskId,
+        actorId: user.id,
+        priority: body.priority === 'CRITICAL' ? 'HIGH' : 'NORMAL',
+      });
+    }
+
+    await refreshProjectProgress(body.project_id ?? null);
     await audit(user.id, 'TASK_CREATED', 'TASK', taskId, null, { title: body.title, assignee_id: body.assignee_id });
 
     return NextResponse.json({ ok: true, id: taskId, task_number: created?.task_number }, { status: 201 });

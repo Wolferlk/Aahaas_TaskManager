@@ -11,7 +11,8 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:seed": "node scripts/seed.mjs",
     "db:migrate:reopened": "node scripts/migrate-reopened-status.mjs",
-    "db:backfill:task-teams": "node scripts/backfill-task-teams.mjs"
+    "db:backfill:task-teams": "node scripts/backfill-task-teams.mjs",
+    "db:repair": "node scripts/repair-data.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

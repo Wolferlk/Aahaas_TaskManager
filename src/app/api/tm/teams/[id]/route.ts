@@ -27,11 +27,18 @@ export async function GET(_req: Request, { params }: Ctx) {
               (SELECT COUNT(*) FROM tm_tasks tk WHERE tk.assignee_id = u.id AND tk.deleted_at IS NULL
                  AND tk.status NOT IN ('COMPLETED','CANCELLED')) AS open_tasks,
               (SELECT COUNT(*) FROM tm_tasks tk WHERE tk.assignee_id = u.id AND tk.deleted_at IS NULL
-                 AND tk.status NOT IN ('COMPLETED','CANCELLED') AND tk.deadline < NOW()) AS overdue_tasks
+                 AND tk.status NOT IN ('COMPLETED','CANCELLED')
+                 AND tk.deadline IS NOT NULL AND tk.deadline < NOW()) AS overdue_tasks
          FROM tm_users u
-        WHERE u.team_id = ? AND u.deleted_at IS NULL AND u.status = 'ACTIVE'
-        ORDER BY FIELD(u.role,'LEADER','EMPLOYEE'), u.full_name`,
-      [id],
+        WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE'
+          -- tm_users.team_id is only somebody's primary team. Membership rows
+          -- have to be read too or half the roster is missing here while the
+          -- team card counts them.
+          AND (u.team_id = ?
+               OR EXISTS (SELECT 1 FROM tm_team_members m
+                           WHERE m.team_id = ? AND m.user_id = u.id AND m.is_active = 1))
+        ORDER BY FIELD(u.role,'MANAGER','LEADER','EMPLOYEE'), u.full_name`,
+      [id, id],
     );
 
     // Leader changes never rewrite task history — the assignment log is kept.

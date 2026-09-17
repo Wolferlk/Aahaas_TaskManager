@@ -59,6 +59,14 @@ export function useMeta() {
 
   const departments = data?.departments ?? [];
   const teams = data?.teams ?? [];
+  const activeDepartments = departments.filter((d) => d.status !== 'DISABLED');
+
+  // Temporary, and the same restriction the signup form already applies: IT is
+  // the only department currently in use, so offering the rest in a task picker
+  // invites work to be filed somewhere nobody is watching.
+  const itDepartment = activeDepartments.find(
+    (d) => d.code?.toUpperCase() === 'IT' || d.name.trim().toUpperCase() === 'IT',
+  );
 
   return {
     // The full lists still carry disabled rows, because a task or a person can
@@ -66,7 +74,14 @@ export function useMeta() {
     // the `active*` lists so nothing disabled can be chosen afresh.
     departments,
     teams,
-    activeDepartments: departments.filter((d) => d.status !== 'DISABLED'),
+    activeDepartments,
+    /**
+     * The departments a task may be filed against today: IT alone. Falls back
+     * to the full active list if no IT department exists, so the picker never
+     * ends up empty.
+     */
+    assignableDepartments: itDepartment ? [itDepartment] : activeDepartments,
+    itDepartment,
     activeTeams: teams.filter((t) => t.status !== 'DISABLED'),
     projects: data?.projects ?? [],
     categories: data?.categories ?? [],

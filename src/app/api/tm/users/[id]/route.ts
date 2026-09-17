@@ -4,6 +4,7 @@ import { audit, forbidden, notFound, parseBody, requireUser, toErrorResponse } f
 import { userUpdateSchema } from '@/lib/validation';
 import { notify } from '@/lib/notifications';
 import { computeMetrics, getWeights, scoreFromMetrics } from '@/lib/performance';
+import { awardBadgesQuietly, badgeProgress } from '@/lib/badges';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -29,13 +30,12 @@ export async function GET(_req: Request, { params }: Ctx) {
     const metrics = await computeMetrics(id, now.getFullYear(), now.getMonth() + 1);
     const { score } = scoreFromMetrics(metrics, await getWeights());
 
+    // Award before reading, so a badge someone qualified for through work that
+    // predates the rules being evaluated shows up the first time they look.
+    await awardBadgesQuietly(id);
+
     const [badges, recent, rewards] = await Promise.all([
-      query(
-        `SELECT b.code, b.name, b.description, b.icon, b.tier, ub.awarded_at
-           FROM tm_user_badges ub JOIN tm_badges b ON b.id = ub.badge_id
-          WHERE ub.user_id = ? ORDER BY ub.awarded_at DESC`,
-        [id],
-      ),
+      badgeProgress(id),
       query(
         `SELECT a.action, a.field, a.created_at, t.task_number, t.title
            FROM tm_task_activity_logs a

@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { execute, queryOne } from '@/lib/db';
 import { audit, badRequest, forbidden, notFound, parseBody, requirePermission, toErrorResponse } from '@/lib/api';
 import { approvalDecisionSchema } from '@/lib/validation';
-import { logActivity, logStatusChange } from '@/lib/tasks';
+import { logActivity, logStatusChange, refreshProjectProgress } from '@/lib/tasks';
 import { notify } from '@/lib/notifications';
+import { awardBadgesQuietly } from '@/lib/badges';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -144,6 +145,14 @@ export async function POST(req: Request, { params }: Ctx) {
           body.decision === 'APPROVED' ? [user.id, taskId] : [taskId],
         );
         await logStatusChange(taskId, 'REVIEW', to as never, user.id, body.comment ?? null);
+
+        const finished = await queryOne<{ project_id: number | null; assignee_id: number | null }>(
+          'SELECT project_id, assignee_id FROM tm_tasks WHERE id = ?',
+          [taskId],
+        );
+        await refreshProjectProgress(finished?.project_id);
+        if (body.decision === 'APPROVED') await awardBadgesQuietly(finished?.assignee_id);
+
         await notify({
           userId: request.requester_id!,
           type: body.decision === 'APPROVED' ? 'TASK_APPROVED' : 'TASK_REJECTED',
@@ -161,18 +170,43 @@ export async function POST(req: Request, { params }: Ctx) {
       case 'TASK_REASSIGNMENT': {
         const taskId = request.entity_id!;
         if (body.decision === 'APPROVED' && payload?.new_assignee_id) {
+          const current = await queryOne<{ assignee_id: number | null; title: string }>(
+            'SELECT assignee_id, title FROM tm_tasks WHERE id = ?',
+            [taskId],
+          );
           await execute('UPDATE tm_tasks SET assignee_id = ? WHERE id = ?', [payload.new_assignee_id, taskId]);
-          await logActivity(taskId, user.id, 'ASSIGNEE_CHANGED', 'assignee_id', null, payload.new_assignee_id);
+          await logActivity(
+            taskId,
+            user.id,
+            'ASSIGNEE_CHANGED',
+            'assignee_id',
+            current?.assignee_id ?? null,
+            payload.new_assignee_id,
+          );
           await notify({
             userId: Number(payload.new_assignee_id),
             type: 'TASK_ASSIGNED',
-            title: 'A task was reassigned to you',
+            title: `Reassigned to you: ${current?.title ?? 'a task'}`,
+            body: body.comment ?? undefined,
             link: `/tm/tasks/${taskId}`,
             entityType: 'TASK',
             entityId: taskId,
             actorId: user.id,
             priority: 'HIGH',
           });
+          // The person handing it over hears about it as the outgoing owner,
+          // not only as the requester.
+          if (current?.assignee_id && current.assignee_id !== Number(payload.new_assignee_id)) {
+            await notify({
+              userId: current.assignee_id,
+              type: 'TASK_UNASSIGNED',
+              title: `Reassigned away: ${current.title}`,
+              link: `/tm/tasks/${taskId}`,
+              entityType: 'TASK',
+              entityId: taskId,
+              actorId: user.id,
+            });
+          }
         }
         await notify({
           userId: request.requester_id!,

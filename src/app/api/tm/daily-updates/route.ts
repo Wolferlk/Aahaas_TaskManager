@@ -3,6 +3,7 @@ import { query } from '@/lib/db';
 import { forbidden, intParam, parseBody, requireUser, searchParams, toErrorResponse } from '@/lib/api';
 import { dailyUpdateSchema } from '@/lib/validation';
 import { dailyUpdateScope, saveDailyUpdate } from '@/lib/dailyUpdates';
+import { awardBadgesQuietly } from '@/lib/badges';
 
 /**
  * Reading Daily Updates.
@@ -135,6 +136,9 @@ export async function POST(req: Request) {
     const user = await requireUser();
     const body = await parseBody(req, dailyUpdateSchema);
     const result = await saveDailyUpdate(user, body);
+    // Filing updates is one of the tracked achievements, and tasks are often
+    // completed as part of the same submission.
+    await awardBadgesQuietly(user.id);
 
     return NextResponse.json({
       ok: true,

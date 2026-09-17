@@ -10,6 +10,12 @@ export async function GET(req: Request) {
     const user = await requireUser();
     const sp = searchParams(req);
 
+    // Who the caller may see at all, kept apart from the tab filters so the
+    // per-type counts can be taken over exactly the same set of rows. They used
+    // to be a company-wide count, so a Leader saw a tab reading "3" open onto
+    // an empty list.
+    const scope: string[] = [];
+    const scopeParams: unknown[] = [];
     const where: string[] = [];
     const params: unknown[] = [];
 
@@ -28,18 +34,27 @@ export async function GET(req: Request) {
       // Managers see everything.
     } else if (user.role === 'LEADER') {
       const teams = await ledTeamIds(user.id);
-      where.push("a.type <> 'USER_SIGNUP'");
+      scope.push("a.type <> 'USER_SIGNUP'");
       if (teams.length) {
-        where.push('(a.assigned_to = ? OR r.team_id IN (?))');
-        params.push(user.id, teams);
+        // The task's own team counts as well as the requester's profile team —
+        // the profile column is often unset, which left a Leader seeing only
+        // what happened to be addressed to them by name.
+        scope.push('(a.assigned_to = ? OR a.requester_id = ? OR r.team_id IN (?) OR tk.team_id IN (?))');
+        scopeParams.push(user.id, user.id, teams, teams);
       } else {
-        where.push('a.assigned_to = ?');
-        params.push(user.id);
+        scope.push('(a.assigned_to = ? OR a.requester_id = ?)');
+        scopeParams.push(user.id, user.id);
       }
     } else {
-      where.push('a.requester_id = ?');
-      params.push(user.id);
+      scope.push('a.requester_id = ?');
+      scopeParams.push(user.id);
     }
+
+    const JOINS = `FROM tm_approval_requests a
+         LEFT JOIN tm_users r ON r.id = a.requester_id
+         LEFT JOIN tm_tasks tk ON tk.id = a.entity_id AND a.entity_type = 'TASK'`;
+    const scopeSql = scope.length ? scope.join(' AND ') : '1 = 1';
+    const listWhere = [scopeSql, ...where].join(' AND ');
 
     const rows = await query(
       `SELECT a.*, r.full_name AS requester_name, r.avatar_url AS requester_avatar, r.email AS requester_email,
@@ -48,22 +63,21 @@ export async function GET(req: Request) {
               d.name AS department_name, t.name AS team_name,
               decider.full_name AS decided_by_name,
               tk.task_number, tk.title AS task_title, tk.deadline AS task_deadline
-         FROM tm_approval_requests a
-         LEFT JOIN tm_users r ON r.id = a.requester_id
+         ${JOINS}
          LEFT JOIN tm_departments d ON d.id = r.department_id
          LEFT JOIN tm_teams t ON t.id = r.team_id
          LEFT JOIN tm_users decider ON decider.id = a.decided_by
-         LEFT JOIN tm_tasks tk ON tk.id = a.entity_id AND a.entity_type = 'TASK'
-        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        WHERE ${listWhere}
         ORDER BY FIELD(a.status,'PENDING','APPROVED','REJECTED'), a.created_at DESC
         LIMIT 200`,
-      params,
+      [...scopeParams, ...params],
     );
 
     const counts = await query<{ type: string; c: number }>(
-      user.role === 'MANAGER'
-        ? "SELECT type, COUNT(*) AS c FROM tm_approval_requests WHERE status = 'PENDING' GROUP BY type"
-        : "SELECT type, COUNT(*) AS c FROM tm_approval_requests WHERE status = 'PENDING' AND type <> 'USER_SIGNUP' GROUP BY type",
+      `SELECT a.type, COUNT(*) AS c ${JOINS}
+        WHERE ${scopeSql} AND a.status = 'PENDING'
+        GROUP BY a.type`,
+      scopeParams,
     );
 
     return NextResponse.json({

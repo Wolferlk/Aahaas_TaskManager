@@ -8,10 +8,14 @@ import {
   logActivity,
   logStatusChange,
   refreshParentProgress,
+  refreshProjectProgress,
+  reviewerFor,
+  syncCompletionApproval,
   taskMemberScopeCheck,
   taskScope,
 } from '@/lib/tasks';
 import { notify, notifyMany, taskStakeholderIds } from '@/lib/notifications';
+import { awardBadgesQuietly } from '@/lib/badges';
 import { STATUS_LABEL } from '@/lib/types';
 import type { TaskStatus } from '@/lib/types';
 
@@ -133,6 +137,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
       deadline: string | null;
       approval_required: number;
       parent_task_id: number | null;
+      project_id: number | null;
     }>('SELECT * FROM tm_tasks WHERE id = ? AND deleted_at IS NULL', [id]);
     if (!before) throw notFound('That task does not exist.');
 
@@ -230,13 +235,22 @@ export async function PATCH(req: Request, { params }: Ctx) {
       await logStatusChange(id, before.status, nextStatus, user.id, reason ?? null);
       await logActivity(id, user.id, 'STATUS_CHANGED', 'status', before.status, nextStatus);
 
+      // The Approval Center has to track this status move, not just the
+      // /workflow endpoint: the status dropdown in the drawer lands here, and
+      // completions submitted that way were never raised for approval.
+      await syncCompletionApproval({
+        taskId: id,
+        title: before.title,
+        fromStatus: before.status,
+        toStatus: nextStatus,
+        actorId: user.id,
+        reviewerId: await reviewerFor(before),
+        comment: reason ?? null,
+      });
+
       if (nextStatus === 'REVIEW') {
-        const reviewer = await queryOne<{ leader_user_id: number | null }>(
-          'SELECT leader_user_id FROM tm_teams WHERE id = ?',
-          [before.team_id],
-        );
         await notify({
-          userId: reviewer?.leader_user_id ?? before.created_by,
+          userId: await reviewerFor(before),
           type: 'TASK_REVIEW_REQUESTED',
           title: `Review requested: ${before.title}`,
           body: `${user.full_name} submitted this task for review.`,
@@ -282,21 +296,49 @@ export async function PATCH(req: Request, { params }: Ctx) {
       });
     }
 
-    if (changes.assignee_id && changes.assignee_id !== before.assignee_id) {
-      await notify({
-        userId: changes.assignee_id,
-        type: 'TASK_ASSIGNED',
-        title: `Assigned to you: ${before.title}`,
-        body: `${user.full_name} assigned you this task.`,
-        link: `/tm/tasks?task=${id}`,
-        entityType: 'TASK',
-        entityId: id,
-        actorId: user.id,
-        priority: 'HIGH',
-      });
+    // A handover has two sides. Telling only the new owner left the person who
+    // was carrying the task to find out by noticing it had vanished.
+    if (changes.assignee_id !== undefined && changes.assignee_id !== before.assignee_id) {
+      const taskLink = `/tm/tasks?task=${id}`;
+      if (changes.assignee_id) {
+        await notify({
+          userId: changes.assignee_id,
+          type: 'TASK_ASSIGNED',
+          title: `Assigned to you: ${before.title}`,
+          body: `${user.full_name} assigned you this task.`,
+          link: taskLink,
+          entityType: 'TASK',
+          entityId: id,
+          actorId: user.id,
+          priority: 'HIGH',
+        });
+      }
+      if (before.assignee_id && before.assignee_id !== user.id) {
+        await notify({
+          userId: before.assignee_id,
+          type: 'TASK_UNASSIGNED',
+          title: `Reassigned away: ${before.title}`,
+          body: `${user.full_name} moved this task to someone else.`,
+          link: taskLink,
+          entityType: 'TASK',
+          entityId: id,
+          actorId: user.id,
+        });
+      }
     }
 
     if (before.parent_task_id) await refreshParentProgress(before.parent_task_id);
+
+    // Both the old and the new project, so moving a task between them leaves
+    // neither percentage stale.
+    await refreshProjectProgress(before.project_id);
+    if (changes.project_id !== undefined && changes.project_id !== before.project_id) {
+      await refreshProjectProgress(changes.project_id);
+    }
+
+    if (nextStatus === 'COMPLETED' && before.status !== 'COMPLETED') {
+      await awardBadgesQuietly(before.assignee_id);
+    }
 
     await audit(user.id, 'TASK_UPDATED', 'TASK', id, before.status, changes);
     return NextResponse.json({ ok: true, status: nextStatus ?? before.status });
@@ -311,8 +353,14 @@ export async function DELETE(_req: Request, { params }: Ctx) {
     const user = await requireUser();
     const id = Number((await params).id);
 
-    const task = await queryOne<{ created_by: number; assignee_id: number | null; team_id: number | null; title: string }>(
-      'SELECT created_by, assignee_id, team_id, title FROM tm_tasks WHERE id = ? AND deleted_at IS NULL',
+    const task = await queryOne<{
+      created_by: number;
+      assignee_id: number | null;
+      team_id: number | null;
+      title: string;
+      project_id: number | null;
+    }>(
+      'SELECT created_by, assignee_id, team_id, title, project_id FROM tm_tasks WHERE id = ? AND deleted_at IS NULL',
       [id],
     );
     if (!task) throw notFound('That task does not exist.');
@@ -321,6 +369,7 @@ export async function DELETE(_req: Request, { params }: Ctx) {
     }
 
     await execute('UPDATE tm_tasks SET deleted_at = NOW() WHERE id = ?', [id]);
+    await refreshProjectProgress(task.project_id);
     await logActivity(id, user.id, 'DELETED', null, task.title, null);
     await audit(user.id, 'TASK_DELETED', 'TASK', id, task, null);
 

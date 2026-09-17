@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Label, Select, FieldError } from '@/components/ui/Field';
 import { PhoneInput } from '@/components/ui/PhoneInput';
-import { ProgressRing, Skeleton } from '@/components/ui/Misc';
+import { ProgressBar, ProgressRing, Skeleton } from '@/components/ui/Misc';
 import { AvatarUpload } from '@/components/tm/AvatarUpload';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/components/ui/Toast';
@@ -34,7 +34,18 @@ interface ProfileData {
   };
   score: number;
   metrics: { tasks_completed: number; tasks_assigned: number };
-  badges: Array<{ code: string; name: string; icon: string; tier: string; awarded_at: string }>;
+  badges: Array<{
+    code: string;
+    name: string;
+    description: string | null;
+    icon: string;
+    tier: string;
+    awarded_at: string | null;
+    earned: boolean;
+    value: number;
+    percent: number;
+    rule_threshold: number;
+  }>;
   recent_activity: Array<{ action: string; created_at: string; task_number: string; title: string }>;
   rewards: Array<{ name: string; period_year: number; period_month: number }>;
 }
@@ -180,22 +191,51 @@ export default function ProfilePage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-0">
+                  {/* Locked badges are shown with how far along they are. An
+                      empty panel could not tell you whether you had earned
+                      nothing or whether nothing was being tracked. */}
                   {data.badges.length === 0 ? (
-                    <p className="text-sm text-muted">No badges earned yet.</p>
+                    <p className="text-sm text-muted">No badges are configured yet.</p>
                   ) : (
-                    <div className="flex flex-wrap gap-3">
-                      {data.badges.map((b) => (
-                        <div
-                          key={b.code}
-                          className="flex w-24 flex-col items-center gap-1 rounded-xl border border-line p-3 text-center"
-                        >
-                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-500/12 text-amber-600 dark:text-amber-400">
-                            <Award className="h-5 w-5" />
+                    <>
+                      <p className="mb-3 text-xs text-muted">
+                        {data.badges.filter((b) => b.earned).length} of {data.badges.length} earned
+                      </p>
+                      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                        {data.badges.map((b) => (
+                          <div
+                            key={b.code}
+                            title={b.description ?? undefined}
+                            className={`flex flex-col items-center gap-1.5 rounded-xl border p-3 text-center ${
+                              b.earned ? 'border-amber-500/30 bg-amber-500/5' : 'border-line'
+                            }`}
+                          >
+                            <div
+                              className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                                b.earned
+                                  ? 'bg-amber-500/12 text-amber-600 dark:text-amber-400'
+                                  : 'bg-line/50 text-faint'
+                              }`}
+                            >
+                              <Award className="h-5 w-5" />
+                            </div>
+                            <p className={`text-[11px] font-medium leading-tight ${b.earned ? 'text-ink' : 'text-muted'}`}>
+                              {b.name}
+                            </p>
+                            {b.earned ? (
+                              <p className="text-[10px] text-faint">{b.awarded_at ? fmtDate(b.awarded_at) : 'Earned'}</p>
+                            ) : (
+                              <div className="w-full">
+                                <ProgressBar value={b.percent} />
+                                <p className="mt-1 text-[10px] text-faint">
+                                  {b.value} / {b.rule_threshold}
+                                </p>
+                              </div>
+                            )}
                           </div>
-                          <p className="text-[11px] font-medium leading-tight text-ink">{b.name}</p>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </CardContent>
               </Card>

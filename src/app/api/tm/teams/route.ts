@@ -15,10 +15,27 @@ export async function GET() {
                   AND (u.team_id = t.id
                        OR EXISTS (SELECT 1 FROM tm_team_members m
                                    WHERE m.team_id = t.id AND m.user_id = u.id AND m.is_active = 1))) AS member_count,
-              (SELECT COUNT(*) FROM tm_tasks tk WHERE tk.team_id = t.id AND tk.deleted_at IS NULL
+              -- A task counts for the team when it carries the team's id, and
+              -- also when it carries none but belongs to one of its members.
+              -- Most tasks predate team stamping, so reading team_id alone made
+              -- every one of these counts read zero.
+              (SELECT COUNT(*) FROM tm_tasks tk WHERE tk.deleted_at IS NULL
+                 AND tk.is_personal = 0
+                 AND (tk.team_id = t.id
+                      OR (tk.team_id IS NULL AND tk.assignee_id IN (
+                            SELECT m2.user_id FROM tm_team_members m2
+                             WHERE m2.team_id = t.id AND m2.is_active = 1
+                            UNION SELECT u2.id FROM tm_users u2 WHERE u2.team_id = t.id)))
                  AND tk.status NOT IN ('COMPLETED','CANCELLED')) AS open_tasks,
-              (SELECT COUNT(*) FROM tm_tasks tk WHERE tk.team_id = t.id AND tk.deleted_at IS NULL
-                 AND tk.status NOT IN ('COMPLETED','CANCELLED') AND tk.deadline < NOW()) AS overdue_tasks
+              (SELECT COUNT(*) FROM tm_tasks tk WHERE tk.deleted_at IS NULL
+                 AND tk.is_personal = 0
+                 AND (tk.team_id = t.id
+                      OR (tk.team_id IS NULL AND tk.assignee_id IN (
+                            SELECT m3.user_id FROM tm_team_members m3
+                             WHERE m3.team_id = t.id AND m3.is_active = 1
+                            UNION SELECT u3.id FROM tm_users u3 WHERE u3.team_id = t.id)))
+                 AND tk.status NOT IN ('COMPLETED','CANCELLED')
+                 AND tk.deadline IS NOT NULL AND tk.deadline < NOW()) AS overdue_tasks
          FROM tm_teams t
          JOIN tm_departments d ON d.id = t.department_id
          LEFT JOIN tm_users l ON l.id = t.leader_user_id

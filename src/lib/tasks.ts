@@ -50,13 +50,19 @@ export async function ledTeamIds(userId: number): Promise<number[]> {
   return rows.map((r) => r.id);
 }
 
-/** User ids a Leader may act on: active members of the teams they lead. */
+/**
+ * User ids a Leader may act on: active members of the teams they lead.
+ *
+ * Managers are excluded even when they sit in one of those teams. A Manager
+ * outranks the Leader, so surfacing their queue in the Leader portal — or
+ * letting a Leader reassign their work — inverts the hierarchy.
+ */
 export async function teamMemberIds(userId: number): Promise<number[]> {
   const teams = await ledTeamIds(userId);
   if (!teams.length) return [];
   const rows = await query<{ id: number }>(
     `SELECT DISTINCT u.id FROM tm_users u
-      WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE'
+      WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE' AND u.role <> 'MANAGER'
         AND (u.team_id IN (?) OR EXISTS (SELECT 1 FROM tm_team_members m
               WHERE m.user_id = u.id AND m.is_active = 1 AND m.team_id IN (?)))`,
     [teams, teams],
@@ -89,10 +95,17 @@ export async function taskScope(user: SessionUser, alias = 't'): Promise<Scope> 
     // Membership lives in tm_team_members; tm_users.team_id is only the
     // person's primary team and is often unset, so both are consulted or a
     // Leader sees none of their team's work.
+    // A Manager who happens to sit in the team is not the Leader's report, so
+    // their work is filtered out of the widened team clause.
     const teamSql = teams.length
-      ? ` OR (${a}.visibility <> 'PRIVATE' AND (${a}.team_id IN (?) OR ${a}.assignee_id IN (
-            SELECT u2.id FROM tm_users u2 WHERE u2.team_id IN (?)
-             UNION SELECT m2.user_id FROM tm_team_members m2 WHERE m2.is_active = 1 AND m2.team_id IN (?))))`
+      ? ` OR (${a}.visibility <> 'PRIVATE'
+             AND NOT EXISTS (SELECT 1 FROM tm_users mgr
+                              WHERE mgr.id = ${a}.assignee_id AND mgr.role = 'MANAGER')
+             AND (${a}.team_id IN (?) OR ${a}.assignee_id IN (
+            SELECT u2.id FROM tm_users u2 WHERE u2.team_id IN (?) AND u2.role <> 'MANAGER'
+             UNION SELECT m2.user_id FROM tm_team_members m2
+                    JOIN tm_users u3 ON u3.id = m2.user_id AND u3.role <> 'MANAGER'
+                   WHERE m2.is_active = 1 AND m2.team_id IN (?))))`
       : '';
     const teamParams = teams.length ? [teams, teams, teams] : [];
     return {
@@ -120,12 +133,13 @@ export async function canEditTask(
   if (user.role === 'MANAGER') return true;
   if (task.created_by === user.id) return true;
   if (user.role === 'LEADER') {
+    const members = await teamMemberIds(user.id);
+    // A Manager's own work is never editable by a Leader, even when it carries
+    // the team's id — teamMemberIds already leaves Managers out.
+    if (task.assignee_id && !members.includes(task.assignee_id)) return false;
     const teams = await ledTeamIds(user.id);
     if (task.team_id && teams.includes(task.team_id)) return true;
-    if (task.assignee_id) {
-      const members = await teamMemberIds(user.id);
-      if (members.includes(task.assignee_id)) return true;
-    }
+    if (task.assignee_id && members.includes(task.assignee_id)) return true;
   }
   return false;
 }
@@ -290,6 +304,123 @@ export async function refreshParentProgress(parentId: number) {
   if (!row || !row.total) return;
   const progress = Math.round((Number(row.done) / Number(row.total)) * 100);
   await execute('UPDATE tm_tasks SET progress = ? WHERE id = ?', [progress, parentId]);
+}
+
+/**
+ * Recomputes and stores a project's completion percentage and health.
+ *
+ * Both are also derived on read, but the stored columns are what every other
+ * surface (project cards elsewhere, exports, reports) reads, so they have to
+ * move with the tasks or a project sits at 0% no matter how much is finished.
+ *
+ * Cancelled tasks leave the denominator: work that was called off must not
+ * hold a project below 100%.
+ */
+export async function refreshProjectProgress(projectId: number | null | undefined) {
+  if (!projectId) return;
+
+  const row = await queryOne<Record<string, number | null>>(
+    `SELECT COUNT(*) AS total,
+            SUM(status = 'COMPLETED') AS completed,
+            SUM(status NOT IN ('COMPLETED','CANCELLED') AND deadline < NOW()) AS overdue,
+            SUM(status = 'BLOCKED') AS blocked,
+            SUM(priority = 'CRITICAL' AND status NOT IN ('COMPLETED','CANCELLED') AND deadline < NOW()) AS critical_overdue
+       FROM tm_tasks
+      WHERE project_id = ? AND deleted_at IS NULL AND status <> 'CANCELLED'`,
+    [projectId],
+  );
+
+  const project = await queryOne<{ target_date: string | null }>(
+    'SELECT target_date FROM tm_projects WHERE id = ? AND deleted_at IS NULL',
+    [projectId],
+  );
+  if (!project) return;
+
+  const total = Number(row?.total ?? 0);
+  const completed = Number(row?.completed ?? 0);
+  const progress = total ? Math.round((completed / total) * 100) : 0;
+  const daysToTarget = project.target_date
+    ? Math.ceil((new Date(project.target_date).getTime() - Date.now()) / 864e5)
+    : null;
+
+  const { health, reasons } = projectHealth({
+    total,
+    completed,
+    overdue: Number(row?.overdue ?? 0),
+    blocked: Number(row?.blocked ?? 0),
+    criticalOverdue: Number(row?.critical_overdue ?? 0),
+    daysToTarget,
+  });
+
+  await execute('UPDATE tm_projects SET progress = ?, health = ?, health_reasons = CAST(? AS JSON) WHERE id = ?', [
+    progress,
+    health,
+    JSON.stringify(reasons),
+    projectId,
+  ]);
+}
+
+/**
+ * Keeps the Approval Center in step with a task's review state.
+ *
+ * Moving a task into REVIEW raises a TASK_COMPLETION request; moving it out
+ * closes whatever was open. The workflow endpoint is not the only way a task
+ * reaches REVIEW — the status dropdown in the drawer PATCHes the task directly
+ * — so this has to live somewhere both paths can call, or completions submitted
+ * from the drawer never appear in the Approval Center at all.
+ */
+export async function syncCompletionApproval(opts: {
+  taskId: number;
+  title: string;
+  fromStatus: TaskStatus | string;
+  toStatus: TaskStatus | string;
+  actorId: number;
+  reviewerId: number | null;
+  comment?: string | null;
+}) {
+  const { taskId, title, fromStatus, toStatus, actorId, reviewerId, comment } = opts;
+
+  if (toStatus === 'REVIEW') {
+    const existing = await queryOne<{ id: number }>(
+      `SELECT id FROM tm_approval_requests
+        WHERE type = 'TASK_COMPLETION' AND entity_type = 'TASK' AND entity_id = ? AND status = 'PENDING'`,
+      [taskId],
+    );
+    if (existing) return;
+    await execute(
+      `INSERT INTO tm_approval_requests (type, requester_id, assigned_to, entity_type, entity_id, payload, reason, status)
+       VALUES ('TASK_COMPLETION', ?, ?, 'TASK', ?, CAST(? AS JSON), ?, 'PENDING')`,
+      [
+        actorId,
+        reviewerId,
+        taskId,
+        JSON.stringify({ submitted_from: fromStatus }),
+        comment?.trim() || `Completion review for ${title}`,
+      ],
+    );
+    return;
+  }
+
+  // Any move out of review settles the open request. The statement is a no-op
+  // when nothing is pending, so it is safe on every other transition too.
+  await execute(
+    `UPDATE tm_approval_requests
+        SET status = ?, decided_by = ?, decided_at = NOW(), decision_comment = ?
+      WHERE type = 'TASK_COMPLETION' AND entity_type = 'TASK' AND entity_id = ? AND status = 'PENDING'`,
+    [toStatus === 'COMPLETED' ? 'APPROVED' : 'REJECTED', actorId, comment ?? null, taskId],
+  );
+}
+
+/** The person who reviews a task: its team's Leader, else whoever raised it. */
+export async function reviewerFor(task: { team_id: number | null; created_by: number }): Promise<number> {
+  if (task.team_id) {
+    const team = await queryOne<{ leader_user_id: number | null }>(
+      'SELECT leader_user_id FROM tm_teams WHERE id = ? AND deleted_at IS NULL',
+      [task.team_id],
+    );
+    if (team?.leader_user_id) return team.leader_user_id;
+  }
+  return task.created_by;
 }
 
 /**

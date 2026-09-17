@@ -49,7 +49,7 @@ export function TaskEditModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { users, projects, activeDepartments, activeTeams, categories } = useMeta();
+  const { users, projects, activeDepartments, assignableDepartments, activeTeams, categories } = useMeta();
   const toast = useToast();
 
   const [form, setForm] = useState(() => toForm(task));
@@ -69,6 +69,10 @@ export function TaskEditModal({
     setForm((prev) => ({ ...prev, [key]: value }));
 
   const deadlineChanged = form.deadline !== toForm(task).deadline;
+
+  const departmentOptions = assignableDepartments.some((d) => String(d.id) === form.department_id)
+    ? assignableDepartments
+    : [...assignableDepartments, ...activeDepartments.filter((d) => String(d.id) === form.department_id)];
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -170,7 +174,10 @@ export function TaskEditModal({
             <Label htmlFor="te-dept">Department</Label>
             <Select id="te-dept" value={form.department_id} onChange={(e) => set('department_id', e.target.value)}>
               <option value="">—</option>
-              {activeDepartments.map((d) => (
+              {/* IT only, as everywhere else — but a task already filed against
+                  another department keeps its own option so editing it does not
+                  silently move it. */}
+              {departmentOptions.map((d) => (
                 <option key={d.id} value={d.id}>{d.name}</option>
               ))}
             </Select>

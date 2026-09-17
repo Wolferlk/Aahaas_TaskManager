@@ -6,10 +6,11 @@ import useSWR from 'swr';
 import {
   Calendar, Clock, User, Flag, CheckSquare,
   Plus, Send, Trash2, Pencil, ExternalLink, AlertCircle, GitBranch, ChevronRight, ChevronLeft, SquarePen, UserPlus,
+  CalendarPlus,
 } from 'lucide-react';
 import { Drawer, OverlayHeader } from '@/components/ui/Overlay';
 import { Button } from '@/components/ui/Button';
-import { Textarea, Select } from '@/components/ui/Field';
+import { Textarea, Select, Input } from '@/components/ui/Field';
 import { PriorityBadge, StatusBadge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
 import { ProgressBar, Skeleton, Divider } from '@/components/ui/Misc';
@@ -333,6 +334,8 @@ function DetailsTab({
 
       <ReassignmentRequest data={data} onRefresh={onRefresh} />
 
+      <ExtensionRequest data={data} onRefresh={onRefresh} />
+
       <div className="flex flex-wrap gap-2">
         {t.status !== 'COMPLETED' && t.status !== 'CANCELLED' && data.can_edit === false && (
           <Button size="sm" variant="secondary" onClick={() => onWorkflow('submit')}>Submit for review</Button>
@@ -408,6 +411,86 @@ function ReassignmentRequest({ data, onRefresh }: { data: TaskDetail; onRefresh:
         ))}
       </Select>
       <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="Why should this move?" />
+      <div className="flex gap-2">
+        <Button size="sm" onClick={submit} loading={sending}>Send request</Button>
+        <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A deadline move an assignee asks for rather than takes.
+ *
+ * The API for this has existed since the Approval Center was built, but nothing
+ * in the UI ever called it — which is why the Deadline Extensions tab had never
+ * had a single row in it to show.
+ */
+function ExtensionRequest({ data, onRefresh }: { data: TaskDetail; onRefresh: () => void }) {
+  const { user } = useSession();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [requested, setRequested] = useState('');
+  const [reason, setReason] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const t = data.task;
+  const canRequest =
+    t.assignee_id === user?.id && !!t.deadline && t.status !== 'COMPLETED' && t.status !== 'CANCELLED';
+  if (!canRequest) return null;
+
+  const submit = async () => {
+    if (!requested || reason.trim().length < 5) {
+      toast({ kind: 'error', title: 'Pick a new date and explain why.' });
+      return;
+    }
+    if (t.deadline && new Date(requested) <= new Date(t.deadline)) {
+      toast({ kind: 'error', title: 'The new date has to be later than the current deadline.' });
+      return;
+    }
+    setSending(true);
+    try {
+      await apiPost('/api/tm/approvals', {
+        task_id: t.id,
+        requested_deadline: requested,
+        reason: reason.trim(),
+      });
+      toast({ kind: 'success', title: 'Extension requested' });
+      setOpen(false);
+      setRequested('');
+      setReason('');
+      onRefresh();
+    } catch (err) {
+      toast({ kind: 'error', title: err instanceof ApiClientError ? err.message : 'Could not send the request' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+        <CalendarPlus className="h-3.5 w-3.5" /> Request deadline extension
+      </Button>
+    );
+  }
+
+  return (
+    <div className="space-y-2 rounded-xl border border-line p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-faint">Request deadline extension</p>
+      <p className="text-xs text-muted">Currently due {fmtDateTime(t.deadline!)}</p>
+      <Input
+        type="datetime-local"
+        value={requested}
+        onChange={(e) => setRequested(e.target.value)}
+        aria-label="New deadline"
+      />
+      <Textarea
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        rows={2}
+        placeholder="Why is more time needed?"
+      />
       <div className="flex gap-2">
         <Button size="sm" onClick={submit} loading={sending}>Send request</Button>
         <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>

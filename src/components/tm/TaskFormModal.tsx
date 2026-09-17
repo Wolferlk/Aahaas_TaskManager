@@ -36,7 +36,7 @@ export function TaskFormModal({
   title?: string;
   subtitle?: string;
 }) {
-  const { users, projects, activeDepartments, activeTeams, categories } = useMeta();
+  const { users, projects, assignableDepartments, activeTeams, categories } = useMeta();
   const { user } = useSession();
   const toast = useToast();
 
@@ -237,7 +237,7 @@ export function TaskFormModal({
                 <Label htmlFor="qa-dept">Department</Label>
                 <Select id="qa-dept" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
                   <option value="">—</option>
-                  {activeDepartments.map((d) => (
+                  {assignableDepartments.map((d) => (
                     <option key={d.id} value={d.id}>{d.name}</option>
                   ))}
                 </Select>

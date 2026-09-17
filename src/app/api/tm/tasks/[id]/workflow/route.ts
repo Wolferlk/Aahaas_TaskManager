@@ -2,8 +2,17 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { execute, queryOne } from '@/lib/db';
 import { audit, badRequest, forbidden, notFound, parseBody, requireUser, toErrorResponse } from '@/lib/api';
-import { logActivity, logStatusChange, refreshParentProgress, canEditTask } from '@/lib/tasks';
+import {
+  canEditTask,
+  logActivity,
+  logStatusChange,
+  refreshParentProgress,
+  refreshProjectProgress,
+  reviewerFor,
+  syncCompletionApproval,
+} from '@/lib/tasks';
 import { notify } from '@/lib/notifications';
+import { awardBadgesQuietly } from '@/lib/badges';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -30,8 +39,9 @@ export async function POST(req: Request, { params }: Ctx) {
       created_by: number;
       team_id: number | null;
       parent_task_id: number | null;
+      project_id: number | null;
     }>(
-      'SELECT id, title, status, assignee_id, created_by, team_id, parent_task_id FROM tm_tasks WHERE id = ? AND deleted_at IS NULL',
+      'SELECT id, title, status, assignee_id, created_by, team_id, parent_task_id, project_id FROM tm_tasks WHERE id = ? AND deleted_at IS NULL',
       [id],
     );
     if (!task) throw notFound('That task does not exist.');
@@ -50,11 +60,7 @@ export async function POST(req: Request, { params }: Ctx) {
       case 'submit': {
         if (!isOwner && !(await canEditTask(user, task))) throw forbidden('Only the assignee can submit this task.');
         to = 'REVIEW';
-        const team = await queryOne<{ leader_user_id: number | null }>(
-          'SELECT leader_user_id FROM tm_teams WHERE id = ?',
-          [task.team_id],
-        );
-        notifyUser = team?.leader_user_id ?? task.created_by;
+        notifyUser = await reviewerFor(task);
         reviewerId = notifyUser;
         notifyType = 'TASK_REVIEW_REQUESTED';
         notifyTitle = `Review requested: ${task.title}`;
@@ -136,32 +142,15 @@ export async function POST(req: Request, { params }: Ctx) {
 
     // Keep the Approval Center in step with the task: submitting raises a
     // TASK_COMPLETION request, and every terminal action closes the open one.
-    if (body.action === 'submit') {
-      const existing = await queryOne<{ id: number }>(
-        "SELECT id FROM tm_approval_requests WHERE type = 'TASK_COMPLETION' AND entity_type = 'TASK' AND entity_id = ? AND status = 'PENDING'",
-        [id],
-      );
-      if (!existing) {
-        await execute(
-          `INSERT INTO tm_approval_requests (type, requester_id, assigned_to, entity_type, entity_id, payload, reason, status)
-           VALUES ('TASK_COMPLETION', ?, ?, 'TASK', ?, CAST(? AS JSON), ?, 'PENDING')`,
-          [
-            user.id,
-            reviewerId,
-            id,
-            JSON.stringify({ submitted_from: task.status }),
-            body.comment?.trim() || `Completion review for ${task.title}`,
-          ],
-        );
-      }
-    } else if (['approve', 'reject', 'request_changes', 'reopen', 'cancel'].includes(body.action)) {
-      await execute(
-        `UPDATE tm_approval_requests
-            SET status = ?, decided_by = ?, decided_at = NOW(), decision_comment = ?
-          WHERE type = 'TASK_COMPLETION' AND entity_type = 'TASK' AND entity_id = ? AND status = 'PENDING'`,
-        [body.action === 'approve' ? 'APPROVED' : 'REJECTED', user.id, body.comment ?? null, id],
-      );
-    }
+    await syncCompletionApproval({
+      taskId: id,
+      title: task.title,
+      fromStatus: task.status,
+      toStatus: to,
+      actorId: user.id,
+      reviewerId,
+      comment: body.comment ?? null,
+    });
 
     await logStatusChange(id, task.status as never, to as never, user.id, body.comment ?? null);
     await logActivity(
@@ -196,6 +185,9 @@ export async function POST(req: Request, { params }: Ctx) {
     }
 
     if (task.parent_task_id) await refreshParentProgress(task.parent_task_id);
+    await refreshProjectProgress(task.project_id);
+    if (to === 'COMPLETED') await awardBadgesQuietly(task.assignee_id);
+
     await audit(user.id, `TASK_${body.action.toUpperCase()}`, 'TASK', id, task.status, to);
 
     return NextResponse.json({ ok: true, status: to });

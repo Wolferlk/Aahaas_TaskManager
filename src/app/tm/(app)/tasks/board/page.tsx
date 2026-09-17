@@ -10,6 +10,7 @@ import { ProgressBar, Skeleton } from '@/components/ui/Misc';
 import { fmtDueIn } from '@/lib/format';
 import { TaskDrawer } from '@/components/tm/TaskDrawer';
 import { useToast } from '@/components/ui/Toast';
+import { useSession } from '@/hooks/useSession';
 import { BOARD_STATUSES, STATUS_LABEL, type TaskStatus } from '@/lib/types';
 
 interface TaskRow {
@@ -42,8 +43,12 @@ function BoardInner() {
   // The board used to be hard-wired to view=team, which excludes the viewer's
   // own work - so an employee never saw their own tasks or updates here.
   const [view, setView] = useState<'my' | 'team'>('my');
+  const { user } = useSession();
+  // An Employee supervises nobody, so "Team" was a tab onto an empty board.
+  const showViewSwitch = user?.role === 'MANAGER' || user?.role === 'LEADER';
+  const effectiveView = showViewSwitch ? view : 'my';
   const { data, isLoading, mutate } = useSWR<{ tasks: TaskRow[] }>(
-    `/api/tm/tasks?limit=200&view=${view}`,
+    `/api/tm/tasks?limit=200&view=${effectiveView}`,
     fetcher,
     // The board is a live wall - pick up other people's moves without a reload.
     { revalidateOnFocus: true, refreshInterval: 30000, keepPreviousData: true },
@@ -76,6 +81,7 @@ function BoardInner() {
         title="Board"
         subtitle="Drag cards between columns to update status."
         actions={
+          showViewSwitch && (
           <div className="flex rounded-lg border border-line p-0.5">
             {VIEWS.map((v) => (
               <button
@@ -89,6 +95,7 @@ function BoardInner() {
               </button>
             ))}
           </div>
+          )
         }
       />
       {isLoading ? (
