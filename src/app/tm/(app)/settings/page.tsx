@@ -14,6 +14,7 @@ import { EmailSettings } from '@/components/tm/settings/EmailSettings';
 import { GithubSettings } from '@/components/tm/settings/GithubSettings';
 import { AutoSubmitSettings } from '@/components/tm/settings/AutoSubmitSettings';
 import { DailyMailRoutes } from '@/components/tm/settings/DailyMailRoutes';
+import { AppDataReset } from '@/components/tm/settings/AppDataReset';
 import { useTheme } from '@/hooks/useTheme';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/components/ui/Toast';
@@ -42,6 +43,7 @@ function SettingsInner() {
       ? [
           { id: 'email', label: 'Email' },
           { id: 'auto', label: 'Auto Updates' },
+          { id: 'data', label: 'App Data' },
         ]
       : []),
     { id: 'ai', label: 'AI' },
@@ -60,6 +62,7 @@ function SettingsInner() {
         {tab === 'daily-mail' && <DailyMailRoutes />}
         {tab === 'email' && <EmailSettings />}
         {tab === 'auto' && <AutoSubmitSettings />}
+        {tab === 'data' && <AppDataReset />}
         {tab === 'ai' && <AiPanel />}
       </PageBody>
     </>
