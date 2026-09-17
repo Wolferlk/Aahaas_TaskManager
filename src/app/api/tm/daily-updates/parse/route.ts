@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { execute, query } from '@/lib/db';
 import { parseBody, requireUser, toErrorResponse } from '@/lib/api';
 import { parseDailyUpdate } from '@/lib/ai';
+import { suggestTaskForItem } from '@/lib/dailyUpdates';
 
 const schema = z.object({ text: z.string().trim().min(5, 'Paste your update first.').max(50000) });
 
@@ -36,7 +37,7 @@ export async function POST(req: Request) {
 
     // --- Suggest an existing task for each item (never auto-link) ----------
     const items = result.data.items.map((item) => {
-      const suggestion = matchExistingTask(item.title, item.description ?? '', openTasks);
+      const suggestion = suggestTaskForItem(item.title, item.description ?? '', openTasks);
       return { ...item, suggested_task: suggestion };
     });
 
@@ -70,37 +71,4 @@ export async function POST(req: Request) {
   } catch (err) {
     return toErrorResponse(err);
   }
-}
-
-/** Lightweight token-overlap match. The user always confirms before linking. */
-function matchExistingTask(
-  title: string,
-  description: string,
-  tasks: Array<{ id: number; task_number: string; title: string }>,
-) {
-  const stop = new Set(['the', 'and', 'for', 'with', 'from', 'this', 'that', 'was', 'are', 'has', 'have', 'completed', 'started', 'fixed', 'work', 'working']);
-  const tokens = (s: string) =>
-    new Set(
-      s
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .split(/\s+/)
-        .filter((w) => w.length > 2 && !stop.has(w)),
-    );
-
-  const source = tokens(`${title} ${description}`);
-  if (!source.size) return null;
-
-  let best: { id: number; task_number: string; title: string; confidence: number } | null = null;
-  for (const t of tasks) {
-    const target = tokens(t.title);
-    if (!target.size) continue;
-    let overlap = 0;
-    for (const w of target) if (source.has(w)) overlap++;
-    const confidence = overlap / Math.min(source.size, target.size);
-    if (confidence >= 0.34 && (!best || confidence > best.confidence)) {
-      best = { id: t.id, task_number: t.task_number, title: t.title, confidence: Math.round(confidence * 100) / 100 };
-    }
-  }
-  return best;
 }

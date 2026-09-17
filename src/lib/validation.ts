@@ -274,6 +274,28 @@ export const dailyUpdateSchema = z.object({
   items: z.array(dailyUpdateItemSchema).max(200),
 });
 
+/**
+ * Several days recorded in one go — a pasted tracker covering a fortnight is
+ * one action to the person doing it, so it is one request. Each day is the same
+ * payload the single-day route takes, and each is written by `saveDailyUpdate`,
+ * so a bulk record is indistinguishable from days typed one at a time.
+ */
+export const dailyUpdateBulkSchema = z.object({
+  days: z
+    .array(dailyUpdateSchema)
+    .min(1, 'Nothing to record.')
+    .max(60, 'That is more days than can be recorded in one go.')
+    .refine(
+      (days) => new Set(days.map((d) => d.update_date)).size === days.length,
+      'Each day may only appear once in a batch.',
+    ),
+  /**
+   * Off by default: back-filling a fortnight should not put a fortnight of mail
+   * in everyone's inbox. A same-day update still mails as it always has.
+   */
+  send_mail: z.boolean().default(false),
+});
+
 export const approvalDecisionSchema = z.object({
   decision: z.enum(['APPROVED', 'REJECTED']),
   comment: z.string().max(2000).nullable().optional(),

@@ -1149,3 +1149,187 @@ export async function itemsFromCommits(
 
   return { ok: true, fallback: false, data: clean };
 }
+
+/* ------------------------------------------------------------------ *
+ * Pasted tables
+ *
+ * A tracker row is a fact, not prose: it already states its day, its work and
+ * its state. Splitting it is therefore done in code (see ./tableUpdates), and
+ * the model is asked for one thing only — to turn a terse cell into the written
+ * work item a reader of the daily update would expect, without inventing
+ * anything that is not in the cell.
+ * ------------------------------------------------------------------ */
+
+export interface TableRowInput {
+  /** Position in the paste, 1-based — responses are aligned back by it. */
+  n: number;
+  date: string;
+  text: string;
+  notes?: string | null;
+  /** The sheet's own status. Authoritative: the model never overrides it. */
+  status?: string | null;
+}
+
+/** Small enough that a chunk's reply never truncates mid-item. */
+const TABLE_ROWS_PER_CHUNK = 8;
+
+const TABLE_SYSTEM = `You expand rows of an employee's work tracker into full daily-update work items.
+
+Each numbered row below is one completed or in-flight piece of work, written
+tersely as a spreadsheet cell. Your job is to write it up properly — NOT to
+reinterpret it, split it or merge it.
+
+Rules:
+- Return exactly one item per numbered row, in the same order. Never merge rows,
+  never drop a row, never add work that is not written.
+- Never invent work, numbers, people, tickets, tools or outcomes. If the row
+  does not say it, leave the field null.
+- title: a short 3-9 word name for the work, e.g. "Rebuilt weekly and monthly
+  reports". Condense the row; never copy it whole.
+- description (REQUIRED, never null): one or two complete sentences restating
+  the row as the employee would report it to a manager. Never repeat the title.
+- work_detail (REQUIRED): 2-4 sentences giving the fullest honest account the
+  row supports — what was built or changed, which part of the system it touched,
+  and what state it ended in. Expand the row's own nouns; do not pad it with
+  invented specifics. A one-clause row gets a shorter work_detail.
+- technical_notes: the systems, modules, screens, endpoints, formats or tools
+  the row actually names (e.g. "Graph API", "Excel workbook", "CSV export").
+  null when the row names none.
+- impact: who or what this helps, only where the row implies it. null otherwise.
+- outcome: the result, when the row is written as delivered. null otherwise.
+- next_steps: only if the row mentions something outstanding. null otherwise.
+- project: the system or module the row names (e.g. "Accounts System",
+  "Query Monitor"), matched to a known project name when one clearly
+  corresponds. null when the row names none.
+- topic: a 1-3 word grouping for the work, taken from the row's own subject.
+- work_type: exactly one of ${WORK_TYPES.join(', ')}, or null when unclear.
+- status: one of ${STATUSES.join(', ')}. When the row is given with a status,
+  return that status unchanged.
+- priority: one of ${PRIORITIES.join(', ')}. MEDIUM unless the row says otherwise.
+- progress: integer 0-100. Completed work is 100.
+- hours: a number only if the row states a duration, else null.
+- blockers: only what the row states is in the way. null otherwise.
+- tags: 1-4 short lowercase keywords taken from the row's own words.
+- confidence: 0.0-1.0, how directly the row supports what you wrote.
+- ai_generated_fields: the field names you inferred rather than read.
+
+Example row: "Added B2C flights-only sale price at cost policy with zero profit." [Completed]
+Example item: { "title": "Added B2C flights-only cost-price policy", "description": "Added a policy for B2C flights-only bookings that sets the sale price at cost, so those bookings carry zero profit.", "work_detail": "Introduced a pricing policy covering B2C flights-only sales. The sale price is taken at cost rather than marked up, which makes the profit on those bookings zero by design. The rule applies to the flights-only B2C path specifically.", "technical_notes": "B2C flights-only sale pricing", "impact": "Keeps B2C flights-only pricing at cost as the business intends.", "next_steps": null, "outcome": "B2C flights-only bookings now price at cost with zero profit.", "project": null, "topic": "Pricing", "work_type": "Development", "status": "COMPLETED", "priority": "MEDIUM", "progress": 100, "hours": null, "blockers": null, "tags": ["b2c","pricing","flights"], "confidence": 0.9, "ai_generated_fields": ["work_type","priority"] }
+
+Return JSON: { "items": ParsedItem[] }`;
+
+/** The sheet's status decides the item's state, and its state decides progress. */
+function settleRowStatus(item: ParsedItem, row: TableRowInput): ParsedItem {
+  const status = row.status ?? item.status;
+  const modelled = Number.isFinite(item.progress) ? item.progress : 0;
+  const progress =
+    status === 'COMPLETED' ? 100
+    : status === 'TODO' ? 0
+    : modelled > 0 ? modelled
+    : status === 'BLOCKED' || status === 'WAITING' ? 40
+    : 50;
+  return { ...item, status, progress };
+}
+
+/** Rows of one day, cut into replies that comfortably fit in one response. */
+function chunkTableRows(rows: TableRowInput[]): TableRowInput[][] {
+  const chunks: TableRowInput[][] = [];
+  for (const { rows: ofDay } of groupByDate(rows)) {
+    for (let i = 0; i < ofDay.length; i += TABLE_ROWS_PER_CHUNK) {
+      chunks.push(ofDay.slice(i, i + TABLE_ROWS_PER_CHUNK));
+    }
+  }
+  return chunks;
+}
+
+/** Local grouping — ./tableUpdates is client-safe and not imported here. */
+function groupByDate(rows: TableRowInput[]): Array<{ date: string; rows: TableRowInput[] }> {
+  const byDate = new Map<string, TableRowInput[]>();
+  for (const row of rows) {
+    const bucket = byDate.get(row.date);
+    if (bucket) bucket.push(row);
+    else byDate.set(row.date, [row]);
+  }
+  return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, list]) => ({ date, rows: list }));
+}
+
+function buildTablePrompt(chunk: TableRowInput[], context: { projects: string[] }) {
+  return [
+    `Known projects: ${context.projects.join(', ') || 'none recorded'}`,
+    '',
+    `These rows were all recorded for ${chunk[0].date}.`,
+    `Produce exactly ${chunk.length} item${chunk.length === 1 ? '' : 's'}, one per row below, in the same order:`,
+    ...chunk.map((row, i) => {
+      const status = row.status ? ` [${row.status.replace('_', ' ').toLowerCase()}]` : '';
+      const notes = row.notes ? ` (also noted: ${row.notes})` : '';
+      return `${i + 1}. ${row.text}${notes}${status}`;
+    }),
+  ].join('\n');
+}
+
+/**
+ * Expands parsed tracker rows into full work items.
+ *
+ * Every row comes back as an item whatever happens: a chunk the model does not
+ * answer is filled deterministically from the row's own words, so a pasted
+ * tracker is never partly recorded. The row's date and status survive the round
+ * trip untouched — only the prose is the model's.
+ */
+export async function itemsFromTableRows(
+  userId: number,
+  rows: TableRowInput[],
+  context: { projects: string[] },
+): Promise<AiResult<Array<ParsedItem & { row: TableRowInput }>>> {
+  if (!rows.length) {
+    return { ok: false, fallback: true, data: [], message: 'No rows were found in that paste.' };
+  }
+
+  const chunks = chunkTableRows(rows);
+  const responses = await mapWithConcurrency(chunks, 4, (chunk) =>
+    jsonCompletion<{ items: Array<Partial<ParsedItem>> }>(
+      'daily_update_table',
+      userId,
+      TABLE_SYSTEM,
+      buildTablePrompt(chunk, context),
+    ),
+  );
+
+  const produced = new Map<number, ParsedItem & { row: TableRowInput }>();
+  let aiChunks = 0;
+
+  chunks.forEach((chunk, i) => {
+    const returned = responses[i]?.items;
+    // Positional pairing is only trusted when the model answered one per row;
+    // anything else falls back so a row can never take another row's write-up.
+    const aligned = !!returned && returned.length === chunk.length;
+    if (aligned) aiChunks++;
+
+    chunk.forEach((row, n) => {
+      const raw = aligned ? returned[n] : deterministicItem(`${row.text}${row.notes ? ` — ${row.notes}` : ''}`);
+      const item = normaliseParsedItem(raw, { group: null, topic: null, line: row.text });
+      produced.set(row.n, { ...settleRowStatus(item, row), row });
+    });
+  });
+
+  const items = rows.map((row) => produced.get(row.n)).filter((i): i is ParsedItem & { row: TableRowInput } => !!i);
+
+  if (!aiChunks) {
+    return {
+      ok: false,
+      fallback: true,
+      data: items,
+      message:
+        'AI write-up unavailable. Every row was kept with its own date and status — please review the detail before saving.',
+    };
+  }
+
+  return {
+    ok: true,
+    fallback: aiChunks < chunks.length,
+    data: items,
+    message:
+      aiChunks < chunks.length
+        ? `${items.length} tasks read from the paste. Part of it was written up automatically — please review those items.`
+        : `${items.length} tasks read from the paste and written up in full. Nothing is saved until you confirm.`,
+  };
+}

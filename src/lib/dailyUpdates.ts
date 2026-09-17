@@ -507,3 +507,54 @@ export async function saveDailyUpdate(
       : 'AI analysis unavailable. Your data has been saved successfully.',
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * Matching a work item to a task the person already has
+ * ------------------------------------------------------------------ */
+
+export interface TaskSuggestion {
+  id: number;
+  task_number: string;
+  title: string;
+  confidence: number;
+}
+
+/**
+ * Lightweight token-overlap match between a drafted work item and the person's
+ * open tasks. A suggestion is only ever offered — the submitter confirms it on
+ * the review screen, and nothing is linked without that confirmation.
+ */
+export function suggestTaskForItem(
+  title: string,
+  description: string,
+  tasks: Array<{ id: number; task_number: string; title: string }>,
+): TaskSuggestion | null {
+  const stop = new Set([
+    'the', 'and', 'for', 'with', 'from', 'this', 'that', 'was', 'are', 'has', 'have',
+    'completed', 'started', 'fixed', 'work', 'working',
+  ]);
+  const tokens = (s: string) =>
+    new Set(
+      s
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 2 && !stop.has(w)),
+    );
+
+  const source = tokens(`${title} ${description}`);
+  if (!source.size) return null;
+
+  let best: TaskSuggestion | null = null;
+  for (const t of tasks) {
+    const target = tokens(t.title);
+    if (!target.size) continue;
+    let overlap = 0;
+    for (const w of target) if (source.has(w)) overlap++;
+    const confidence = overlap / Math.min(source.size, target.size);
+    if (confidence >= 0.34 && (!best || confidence > best.confidence)) {
+      best = { id: t.id, task_number: t.task_number, title: t.title, confidence: Math.round(confidence * 100) / 100 };
+    }
+  }
+  return best;
+}

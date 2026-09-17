@@ -6,6 +6,7 @@ import useSWR from 'swr';
 import {
   Sparkles, Wand2, Plus, Trash2, CheckCircle2, AlertTriangle, Link2, Github, Mail,
   ChevronDown, ChevronRight, GitCommit, NotebookPen, CalendarPlus, History, Clock3,
+  Table2, CalendarRange,
 } from 'lucide-react';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -16,6 +17,7 @@ import { fmtDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { useToast } from '@/components/ui/Toast';
 import { GithubImport, type ImportedItem } from '@/components/tm/GithubImport';
+import { TableImport, type TableItem } from '@/components/tm/TableImport';
 
 /** The depth behind a work item — optional, but stored verbatim when given. */
 interface ItemDetail {
@@ -113,7 +115,7 @@ interface Coverage {
 
 function NewDailyUpdateForm() {
   const params = useSearchParams();
-  const [mode, setMode] = useState<'paste' | 'github' | 'manual'>('paste');
+  const [mode, setMode] = useState<'paste' | 'table' | 'github' | 'manual'>('paste');
   // ?date=YYYY-MM-DD lands straight on a missed day, so the "catch up" links
   // on the hub open this screen already pointed at the right one.
   const today = new Date().toISOString().slice(0, 10);
@@ -133,6 +135,15 @@ function NewDailyUpdateForm() {
   const [day, setDay] = useState<DayDetail>(emptyDay());
   const [showDayDetail, setShowDayDetail] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** What a multi-day table import recorded, shown in place of the single-day
+   *  confirmation because a fortnight of days has no single summary. */
+  const [batch, setBatch] = useState<{
+    saved: number;
+    failed: number;
+    items: number;
+    mailed: number;
+    results: Array<{ date: string; ok: boolean; items?: number; error?: string }>;
+  } | null>(null);
   const [saved, setSaved] = useState<{
     summary: string;
     detailed_summary?: string;
@@ -241,6 +252,57 @@ function NewDailyUpdateForm() {
     ]);
   };
 
+  /**
+   * Opens one day of a pasted tracker in the full review form.
+   *
+   * The table panel can record every day on its own, but a day whose items want
+   * hours, times, blockers or a written day-summary is better finished here —
+   * so a group can be lifted out of the batch and edited like any other update.
+   */
+  const loadTableDay = (dayDate: string, imported: TableItem[]) => {
+    setDate(dayDate);
+    setRawText(imported.map((i) => i.source_row.line).join('\n'));
+    setItems(
+      imported.map<ParsedItem>((i) => ({
+        topic: i.topic,
+        title: i.title,
+        project: i.project,
+        project_id: null,
+        description: i.description,
+        work_type: i.work_type,
+        status: i.status,
+        priority: i.priority,
+        progress: i.progress,
+        start_time: null,
+        end_time: null,
+        hours: i.hours,
+        blockers: i.blockers,
+        outcome: i.outcome,
+        tags: i.tags,
+        confidence: i.confidence,
+        ai_generated_fields: i.ai_generated_fields,
+        suggested_task: i.suggested_task,
+        linked_action: i.linked_action,
+        keep: true,
+        source: 'AI',
+        expanded: false,
+        detail: {
+          ...emptyDetail('AI'),
+          work_detail: i.work_detail ?? '',
+          technical_notes: i.technical_notes ?? '',
+          impact: i.impact ?? '',
+          next_steps: i.next_steps ?? '',
+        },
+      })),
+    );
+    setDay((prev) => ({ ...prev, focus_area: prev.focus_area || (imported[0]?.topic ?? '') }));
+    setParseMessage({
+      tone: 'ai',
+      text: `${imported.length} task${imported.length === 1 ? '' : 's'} from your paste, ready to review. Saving here records ${fmtDate(dayDate, { day: 'numeric', month: 'long' })} on its own.`,
+    });
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const addBlank = () => {
     setItems((prev) => [
       ...prev,
@@ -278,7 +340,8 @@ function NewDailyUpdateForm() {
     try {
       const res = await apiPost('/api/tm/daily-updates', {
         update_date: date,
-        raw_text: mode === 'paste' ? rawText : null,
+        // Whatever was pasted — free-form text, or the tracker rows of this day.
+        raw_text: rawText || null,
         source: mode === 'manual' ? 'MANUAL' : 'AI_PARSED',
         status: 'SUBMITTED',
         blockers: blockers || null,
@@ -318,6 +381,78 @@ function NewDailyUpdateForm() {
 
   // The next unrecorded working day, so a catch-up session can keep going.
   const nextMissing = (cover?.missing ?? []).find((d) => d !== date) ?? null;
+
+  // A table import records many days at once, so it reports per day rather than
+  // borrowing the single-day confirmation, which has one summary to show.
+  if (batch) {
+    return (
+      <PageBody>
+        <Card className="animate-fade-up mx-auto max-w-2xl">
+          <CardContent className="p-8">
+            <div className="text-center">
+              <div
+                className={cn(
+                  'mx-auto flex h-14 w-14 items-center justify-center rounded-2xl',
+                  batch.failed ? 'bg-amber-500/10' : 'bg-emerald-500/10',
+                )}
+              >
+                {batch.failed ? (
+                  <AlertTriangle className="h-7 w-7 text-amber-500" />
+                ) : (
+                  <CheckCircle2 className="h-7 w-7 text-emerald-500" />
+                )}
+              </div>
+              <h2 className="mt-4 text-lg font-semibold text-ink">
+                {batch.saved} day{batch.saved === 1 ? '' : 's'} recorded
+              </h2>
+              <p className="mt-2 text-sm text-muted">
+                {batch.items} task{batch.items === 1 ? '' : 's'} written from your paste
+                {batch.mailed > 0 && `, ${batch.mailed} day${batch.mailed === 1 ? '' : 's'} emailed`}.
+              </p>
+            </div>
+
+            <div className="mt-5 space-y-1.5">
+              {batch.results.map((r) => (
+                <div
+                  key={r.date}
+                  className={cn(
+                    'flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm',
+                    r.ok ? 'bg-line/20 text-muted' : 'bg-red-500/10 text-red-600 dark:text-red-400',
+                  )}
+                >
+                  {r.ok ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                  ) : (
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                  )}
+                  <span className="font-medium text-ink">
+                    {fmtDate(r.date, { weekday: 'short', day: 'numeric', month: 'short' })}
+                  </span>
+                  <span className="ml-auto text-xs">
+                    {r.ok ? `${r.items ?? 0} task${r.items === 1 ? '' : 's'}` : r.error}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {!!batch.failed && (
+              <p className="mt-3 text-center text-xs text-muted">
+                The days that failed are still in the table panel — go back and try them again.
+              </p>
+            )}
+
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              <Button variant="secondary" onClick={() => setBatch(null)}>
+                <CalendarRange className="h-4 w-4" /> Paste another table
+              </Button>
+              <Button variant="secondary" onClick={() => router.push('/tm/daily-updates/history')}>View history</Button>
+              <Button onClick={() => router.push('/tm/daily-updates')}>Back to daily updates</Button>
+            </div>
+          </CardContent>
+        </Card>
+      </PageBody>
+    );
+  }
 
   if (saved) {
     return (
@@ -464,10 +599,11 @@ function NewDailyUpdateForm() {
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {(
             [
               { id: 'paste', icon: Wand2, title: 'Paste free-form text', hint: 'AI extracts work items for you to review' },
+              { id: 'table', icon: Table2, title: 'Paste a tracker table', hint: 'Dated rows become full daily tasks — many days at once' },
               { id: 'github', icon: Github, title: 'Import from GitHub', hint: "Draft today's update from your commits" },
               { id: 'manual', icon: Plus, title: 'Fill in manually', hint: 'Add structured work items yourself' },
             ] as const
@@ -490,6 +626,17 @@ function NewDailyUpdateForm() {
             );
           })}
         </div>
+
+        {mode === 'table' && (
+          <TableImport
+            fallbackDate={date}
+            onLoadDay={loadTableDay}
+            onRecorded={(report) => {
+              setBatch(report);
+              refreshCover();
+            }}
+          />
+        )}
 
         {mode === 'github' && <GithubImport date={date} onImported={acceptGithubItems} />}
 
