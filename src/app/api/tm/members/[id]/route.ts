@@ -187,7 +187,7 @@ export async function GET(req: Request, { params }: Ctx) {
         ),
         query(
           `SELECT d.id, DATE_FORMAT(d.update_date, '%Y-%m-%d') AS update_date, d.summary, d.total_hours,
-                  d.status, d.mood, d.blockers, d.submitted_at, d.source,
+                  d.status, d.mood, d.blockers, d.submitted_at, d.source, d.raw_text,
                   dd.is_auto_submitted, dd.next_day_plan, dd.focus_area,
                   (SELECT COUNT(*) FROM tm_daily_update_items i WHERE i.daily_update_id = d.id) AS item_count
              FROM tm_daily_updates d

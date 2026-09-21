@@ -22,6 +22,7 @@ import { EmptyState, ProgressBar, Skeleton } from '@/components/ui/Misc';
 import { Tabs } from '@/components/ui/Tabs';
 import { TaskDrawer } from './TaskDrawer';
 import { TaskFormModal } from './TaskFormModal';
+import { OriginalText } from './OriginalText';
 
 /* ------------------------------------------------------------------ *
  * Shapes
@@ -109,6 +110,7 @@ interface MemberDetailResponse {
     id: number;
     update_date: string;
     summary: string | null;
+    raw_text: string | null;
     total_hours: string | null;
     status: string;
     mood: string | null;
@@ -451,6 +453,7 @@ function DailyTimeline({ detail }: { detail: MemberDetailResponse }) {
                       {d.next_day_plan}
                     </p>
                   )}
+                  <OriginalText text={d.raw_text} className="mt-1" />
                 </CardContent>
               </Card>
             </li>

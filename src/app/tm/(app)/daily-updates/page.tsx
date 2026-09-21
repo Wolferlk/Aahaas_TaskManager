@@ -16,6 +16,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { fmtDate } from '@/lib/format';
 import { useSession } from '@/hooks/useSession';
 import { cn } from '@/lib/cn';
+import { OriginalText } from '@/components/tm/OriginalText';
 
 interface UpdateItem {
   id: number;
@@ -30,6 +31,7 @@ interface UpdateRow {
   status: string;
   total_hours: string | null;
   summary: string | null;
+  raw_text: string | null;
   item_count: number;
   full_name: string;
   avatar_url: string | null;
@@ -370,6 +372,7 @@ export default function DailyUpdatesPage() {
                       </button>
                     )}
                   </div>
+                  <OriginalText text={u.raw_text} />
                 </CardContent>
               </Card>
             );

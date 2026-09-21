@@ -14,6 +14,7 @@ import { fmtDate } from '@/lib/format';
 import { useSession } from '@/hooks/useSession';
 import { History, ChevronDown, ChevronRight, Bot, GitCommit, Users, UserRound, Building2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { OriginalText } from '@/components/tm/OriginalText';
 
 interface UpdateItem {
   id: number;
@@ -51,6 +52,7 @@ interface UpdateRow {
   status: string;
   total_hours: string | null;
   summary: string | null;
+  raw_text: string | null;
   full_name: string;
   avatar_url: string | null;
   team_name: string | null;
@@ -264,6 +266,8 @@ function DailyUpdateHistoryInner() {
                         </div>
                       </>
                     )}
+
+                    <OriginalText text={u.raw_text} />
 
                     {hasDetail(u, items) && (
                       <>
