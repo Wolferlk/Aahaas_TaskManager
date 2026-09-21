@@ -11,7 +11,7 @@ export const PERMISSIONS = [
   'tm.user.view', 'tm.user.approve', 'tm.user.manage', 'tm.user.change_role',
   'tm.team.view', 'tm.team.manage',
   'tm.department.view', 'tm.department.manage',
-  'tm.project.view', 'tm.project.manage',
+  'tm.project.view', 'tm.project.create', 'tm.project.manage',
   'tm.daily_update.submit', 'tm.daily_update.view_team', 'tm.daily_update.view_all',
   'tm.approval.decide', 'tm.approval.request',
   'tm.report.self', 'tm.report.team', 'tm.report.company', 'tm.report.export',
@@ -33,6 +33,9 @@ const EMPLOYEE: Permission[] = [
 const LEADER: Permission[] = [
   ...EMPLOYEE,
   'tm.task.assign', 'tm.task.approve', 'tm.task.reopen', 'tm.task.change_deadline',
+  // A Leader may start a project and run the ones they own. Editing anyone
+  // else's, and deleting any at all, stays with 'tm.project.manage'.
+  'tm.project.create',
   'tm.daily_update.view_team', 'tm.approval.decide',
   'tm.report.team', 'tm.report.export',
   'tm.performance.view_team', 'tm.template.manage',

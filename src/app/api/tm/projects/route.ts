@@ -60,7 +60,9 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const user = await requirePermission('tm.project.manage');
+    // Leaders start projects too, so this is 'create' rather than the wider
+    // 'manage' that still guards editing anyone else's and deleting.
+    const user = await requirePermission('tm.project.create');
     const body = await parseBody(req, projectSchema);
 
     const clash = await queryOne<{ id: number }>('SELECT id FROM tm_projects WHERE code = ?', [body.code]);

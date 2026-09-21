@@ -24,6 +24,7 @@ interface Project {
   description: string | null;
   department_id: number | null;
   owner_user_id: number | null;
+  created_by: number | null;
   status: string;
   progress: number;
   health: string;
@@ -51,16 +52,22 @@ const HEALTH_LABEL: Record<string, string> = {
 
 export default function ProjectsPage() {
   const { data, isLoading, mutate } = useSWR<{ projects: Project[] }>('/api/tm/projects', fetcher);
-  const { can } = useSession();
+  const { can, user } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
+
+  const canCreate = can('tm.project.create');
+  // Managers edit anything; a Leader edits the projects they own or started.
+  const canEdit = (p: Project) =>
+    can('tm.project.manage') ||
+    (canCreate && !!user && (p.owner_user_id === user.id || p.created_by === user.id));
 
   return (
     <>
       <PageHeader
         title="Projects"
         subtitle="Lightweight project tracking with automatic health scoring"
-        actions={can('tm.project.manage') && <Button size="sm" onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> New Project</Button>}
+        actions={canCreate && <Button size="sm" onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> New Project</Button>}
       />
       <PageBody>
         {isLoading && (
@@ -70,7 +77,22 @@ export default function ProjectsPage() {
         )}
 
         {data && data.projects.length === 0 && (
-          <EmptyState icon={FolderKanban} title="Create your first project" description="Group related tasks under a project to track progress and health." />
+          <EmptyState
+            icon={FolderKanban}
+            title={canCreate ? 'Create your first project' : 'No projects yet'}
+            description={
+              canCreate
+                ? 'Group related tasks under a project to track progress and health.'
+                : 'Projects your team starts will show up here.'
+            }
+            action={
+              canCreate && (
+                <Button size="sm" onClick={() => setCreateOpen(true)}>
+                  <Plus className="h-4 w-4" /> New Project
+                </Button>
+              )
+            }
+          />
         )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -86,7 +108,7 @@ export default function ProjectsPage() {
                     <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-medium', HEALTH_STYLE[p.health])}>
                       {HEALTH_LABEL[p.health]}
                     </span>
-                    {can('tm.project.manage') && (
+                    {canEdit(p) && (
                       <button
                         onClick={() => setEditing(p)}
                         className="focus-ring rounded-lg p-1.5 text-faint hover:bg-line/30 hover:text-ink"

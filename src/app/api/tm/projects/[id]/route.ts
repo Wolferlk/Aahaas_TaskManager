@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { execute, query, queryOne } from '@/lib/db';
-import { audit, notFound, parseBody, requirePermission, requireUser, toErrorResponse } from '@/lib/api';
+import { audit, forbidden, notFound, parseBody, requirePermission, requireUser, toErrorResponse } from '@/lib/api';
+import { can } from '@/lib/rbac';
 import { projectSchema } from '@/lib/validation';
 import { projectHealth } from '@/lib/tasks';
 
@@ -95,12 +96,22 @@ export async function GET(_req: Request, { params }: Ctx) {
 
 export async function PATCH(req: Request, { params }: Ctx) {
   try {
-    const user = await requirePermission('tm.project.manage');
+    const user = await requireUser();
     const id = Number((await params).id);
     const body = await parseBody(req, projectSchema.partial());
 
-    const before = await queryOne('SELECT * FROM tm_projects WHERE id = ? AND deleted_at IS NULL', [id]);
+    const before = await queryOne<Record<string, unknown>>(
+      'SELECT * FROM tm_projects WHERE id = ? AND deleted_at IS NULL',
+      [id],
+    );
     if (!before) throw notFound('Project not found.');
+
+    // A Manager edits any project. A Leader edits only one they own or started,
+    // so creating a project does not hand them every other team's.
+    const owns = Number(before.owner_user_id) === user.id || Number(before.created_by) === user.id;
+    if (!can(user.role, 'tm.project.manage') && !(can(user.role, 'tm.project.create') && owns)) {
+      throw forbidden('You can only edit a project you own.');
+    }
 
     const { member_ids, ...rest } = body;
     const fields: string[] = [];
