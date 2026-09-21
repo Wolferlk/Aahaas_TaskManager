@@ -107,15 +107,32 @@ export async function requestMeta() {
   return { ip: ip ?? undefined, userAgent: h.get('user-agent') ?? undefined };
 }
 
-/** Sliding-window throttle backed by tm_login_attempts. */
+/**
+ * Sliding-window throttle backed by tm_login_attempts.
+ *
+ * Email and IP are counted separately on purpose. A whole office shares one
+ * outbound IP, so a single OR'd counter let one colleague's eight typos lock
+ * everybody out; the IP ceiling is therefore a wide abuse guard, not a
+ * per-person limit.
+ */
+const ATTEMPT_WINDOW_MINUTES = 15;
+const MAX_FAILURES_PER_EMAIL = 8;
+const MAX_FAILURES_PER_IP = 50;
+
 export async function isRateLimited(email: string, ip?: string) {
-  const rows = await query<{ c: number }>(
-    `SELECT COUNT(*) AS c FROM tm_login_attempts
-      WHERE success = 0 AND created_at > (NOW() - INTERVAL 15 MINUTE)
-        AND (email = ? OR (ip_address IS NOT NULL AND ip_address = ?))`,
-    [email, ip ?? ' '],
+  const rows = await query<{ email_failures: number; ip_failures: number }>(
+    `SELECT
+       SUM(email = ?) AS email_failures,
+       SUM(? IS NOT NULL AND ip_address = ?) AS ip_failures
+     FROM tm_login_attempts
+     WHERE success = 0
+       AND created_at > (NOW() - INTERVAL ${ATTEMPT_WINDOW_MINUTES} MINUTE)
+       AND (email = ? OR (ip_address IS NOT NULL AND ip_address = ?))`,
+    [email, ip ?? null, ip ?? null, email, ip ?? null],
   );
-  return (rows[0]?.c ?? 0) >= 8;
+  const byEmail = Number(rows[0]?.email_failures ?? 0);
+  const byIp = Number(rows[0]?.ip_failures ?? 0);
+  return byEmail >= MAX_FAILURES_PER_EMAIL || byIp >= MAX_FAILURES_PER_IP;
 }
 
 export async function recordLoginAttempt(email: string, ip: string | undefined, success: boolean) {
@@ -124,4 +141,16 @@ export async function recordLoginAttempt(email: string, ip: string | undefined, 
     ip ?? null,
     success ? 1 : 0,
   ]);
+
+  // Proving yourself ends the lockout. Without this the failures kept counting
+  // for the rest of the window, so a correct password or emergency code still
+  // came back as "too many failed attempts".
+  if (success) {
+    await execute(
+      `DELETE FROM tm_login_attempts
+        WHERE success = 0 AND email = ?
+          AND created_at > (NOW() - INTERVAL ${ATTEMPT_WINDOW_MINUTES} MINUTE)`,
+      [email],
+    );
+  }
 }
