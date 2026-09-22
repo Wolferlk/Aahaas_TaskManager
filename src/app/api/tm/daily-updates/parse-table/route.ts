@@ -63,6 +63,7 @@ export async function POST(req: Request) {
         text: row.text,
         notes: row.notes,
         status: row.status,
+        task: row.task,
       })),
       { projects: projects.map((p) => p.name) },
     );

@@ -18,6 +18,8 @@
  * never the record.
  */
 
+import { splitTaskBlocks, type TaskBlock } from './taskBlocks';
+
 /** How ambiguous numeric dates (09/07/2026) should be read. */
 export type DateOrder = 'AUTO' | 'DMY' | 'MDY';
 
@@ -43,6 +45,11 @@ export interface TableRow {
   raw_status: string | null;
   /** The line as pasted, so a row can always be traced back. */
   line: string;
+  /**
+   * Set when the paste was a list of written-up tasks ("TASK 3: …" blocks)
+   * rather than a grid — the whole block, fields and all, is this one row.
+   */
+  task?: TaskBlock | null;
 }
 
 export interface RejectedLine {
@@ -211,6 +218,7 @@ interface ReadRow {
   text: string;
   notes: string | null;
   line: string;
+  task?: TaskBlock | null;
 }
 
 /**
@@ -394,7 +402,29 @@ export function parseTableRows(text: string, opts: ParseTableOptions = {}): Tabl
   const rejected: RejectedLine[] = [];
   const read: ReadRow[] = [];
 
-  for (const rawLine of text.split(/\r?\n/)) {
+  // A list of written-up tasks is not a grid: read line by line, each task's
+  // heading, paragraph and "Priority:" lines would become rows of their own.
+  // Each block is one row instead, dated by its own Date: field if it has one.
+  const taskList = splitTaskBlocks(text);
+  if (taskList) {
+    skipped.push(...taskList.preamble.map(squash));
+    for (const block of taskList.blocks) {
+      const status = block.status ? readStatusCell(block.status) : null;
+      read.push({
+        index: block.number,
+        dateCell: block.date ? readDateCell(block.date) : null,
+        rawDate: block.date,
+        status,
+        rawStatus: status ? block.status : null,
+        text: block.title,
+        notes: block.body || null,
+        line: squash(block.raw),
+        task: block,
+      });
+    }
+  }
+
+  for (const rawLine of taskList ? [] : text.split(/\r?\n/)) {
     const line = rawLine.replace(/\s+$/, '');
     if (!line.trim()) continue;
     if (HORIZONTAL_RULE.test(line)) continue;
@@ -441,6 +471,7 @@ export function parseTableRows(text: string, opts: ParseTableOptions = {}): Tabl
       status: row.status,
       raw_status: row.rawStatus,
       line: row.line.slice(0, 2000),
+      task: row.task ?? null,
     });
   }
 

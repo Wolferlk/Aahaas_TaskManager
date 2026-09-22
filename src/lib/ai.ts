@@ -1,6 +1,8 @@
 import 'server-only';
 import OpenAI from 'openai';
 import { execute } from './db';
+import { readStatusCell } from './tableUpdates';
+import { splitTaskBlocks, type TaskBlock } from './taskBlocks';
 
 /**
  * AI is strictly advisory in this module.
@@ -414,10 +416,38 @@ const pick = (value: unknown, allowed: string[], fallback: string) => {
   return allowed.includes(v) ? v : fallback;
 };
 
+/** What people write for each work type, beyond the type's own name. */
+const WORK_TYPE_ALIASES: Array<[RegExp, string]> = [
+  [/^(bug|bugs|bugfix|bug[\s-]?fixing|fix|fixes|hotfix|defect)$/, 'Bug Fix'],
+  [/^(dev|feature|features|enhancement|implementation|coding|new feature)$/, 'Development'],
+  [/^(test|tests|qa|verification|quality assurance|uat)$/, 'Testing'],
+  [/^(docs?|documenting)$/, 'Documentation'],
+  [/^(deploy|release|go[\s-]?live|devops)$/, 'Deployment'],
+  [/^(refactoring|cleanup|clean[\s-]?up)$/, 'Refactor'],
+  [/^(meetings?|call|discussion)$/, 'Meeting'],
+  [/^(investigation|analysis|r&d|spike)$/, 'Research'],
+  [/^(ui|ux|ui\/ux)$/, 'Design'],
+];
+
 function pickWorkType(value: unknown): string | null {
   const v = oneLine(value).toLowerCase();
   if (!v) return null;
-  return WORK_TYPES.find((w) => w.toLowerCase() === v) ?? null;
+  return (
+    WORK_TYPES.find((w) => w.toLowerCase() === v) ??
+    WORK_TYPE_ALIASES.find(([pattern]) => pattern.test(v))?.[1] ??
+    null
+  );
+}
+
+/** "Normal", "High", "P1" — the words a report uses for priority. */
+function pickPriority(value: unknown): string | null {
+  const v = oneLine(value).toLowerCase();
+  if (!v) return null;
+  if (/^(critical|urgent|blocker|highest|p0|asap)$/.test(v)) return 'CRITICAL';
+  if (/^(high|important|p1)$/.test(v)) return 'HIGH';
+  if (/^(normal|medium|moderate|regular|standard|p2)$/.test(v)) return 'MEDIUM';
+  if (/^(low|minor|lowest|trivial|p3|p4)$/.test(v)) return 'LOW';
+  return null;
 }
 
 const DONE = /\b(completed|finished|done|deployed|delivered|fixed|resolved|closed|added|implemented|improved|updated|refactored|developed|extended|enhanced|integrated|built)\b/i;
@@ -567,6 +597,197 @@ function buildChunkPrompt(
     .join('\n');
 }
 
+/* ------------------------------------------------------------------ *
+ * Task blocks
+ *
+ * "TASK 9: Accounts System — …" followed by a paragraph and "Priority:" /
+ * "Kind of Work:" / "Reference:" lines is a task the employee has already
+ * identified. Each block becomes exactly one item: its title, system, work
+ * type, priority and reference are taken as written, and the model only writes
+ * up the detail from the block's own paragraph.
+ * ------------------------------------------------------------------ */
+
+/** A block's paragraph can run long, so fewer go in each call than bullets do. */
+const BLOCKS_PER_CHUNK = 5;
+
+const BLOCK_SYSTEM = `You write up tasks an employee has already listed one by one in their daily update.
+
+Each numbered block below is ONE task. It gives the task's title, the system it
+belongs to, and the employee's own account of the work. The employee decided
+what the tasks are — your job is to write each one up, NOT to split, merge or
+reinterpret them.
+
+Rules:
+- Return exactly one item per block, in the same order. Never merge blocks,
+  never split a block, never drop one, never add work that is not written.
+- Never invent work, numbers, people, tickets, tools or outcomes. If the
+  account does not say it, leave the field null.
+- title: repeat the block's title unchanged.
+- description (REQUIRED): one or two sentences summarising the account as the
+  employee would report it to a manager. Never repeat the title alone.
+- work_detail (REQUIRED): 2-4 sentences giving the fullest honest account the
+  block supports — what was built, changed or checked, which part of the system
+  it touched, and what state it ended in. Use only the block's own content.
+- technical_notes: the components, screens, commands, queries, permissions,
+  errors or tools the account actually names (e.g. "tm.project.create
+  permission", "ONLY_FULL_GROUP_BY"). null when it names none.
+- impact: who or what this helps, only where the account says or implies it.
+- outcome: the result, when the account reports the work as delivered.
+- next_steps: anything the account says still remains ("remains pending",
+  "follow-ups", "to be deployed"). null otherwise.
+- blockers: only what the account says is in the way. Something merely
+  remaining to do is next_steps, not a blocker.
+- status: one of ${STATUSES.join(', ')}. When the block states a status, return
+  it unchanged. Otherwise work reported in the past tense ("Implemented",
+  "Fixed", "Created") is COMPLETED, even when follow-ups remain.
+- work_type: when the block states one, return it; otherwise exactly one of
+  ${WORK_TYPES.join(', ')}, or null when unclear.
+- priority: one of ${PRIORITIES.join(', ')}. When the block states one, map it
+  ("Normal" is MEDIUM). MEDIUM when not stated.
+- progress: integer 0-100. Completed work is 100.
+- hours: a number only if the block states a duration, else null.
+- tags: 1-4 short lowercase keywords taken from the block's own words.
+- confidence: 0.0-1.0, how directly the block supports what you wrote.
+- ai_generated_fields: the field names you inferred rather than read.
+
+Return JSON: { "items": ParsedItem[] }`;
+
+function buildBlockPrompt(chunk: TaskBlock[], context: { projects: string[] }) {
+  return [
+    `Known projects: ${context.projects.join(', ') || 'none recorded'}`,
+    '',
+    `Produce exactly ${chunk.length} item${chunk.length === 1 ? '' : 's'}, one per block below, in the same order:`,
+    ...chunk.map((b, i) =>
+      [
+        '',
+        `${i + 1}. Title: ${b.title}`,
+        b.project ? `   System: ${b.project}` : '',
+        `   Account: ${b.body || '(no description written)'}`,
+        b.work_type ? `   Kind of work: ${b.work_type}` : '',
+        b.priority ? `   Priority: ${b.priority}` : '',
+        b.status ? `   Status: ${b.status}` : '',
+        b.hours !== null ? `   Hours: ${b.hours}` : '',
+        b.blockers ? `   Blockers: ${b.blockers}` : '',
+        b.next_steps ? `   Next steps: ${b.next_steps}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    ),
+  ].join('\n');
+}
+
+/** "Accounts system" is the project the team already calls "Accounts System". */
+function matchProject(name: string | null, projects: string[]): string | null {
+  const wanted = oneLine(name);
+  if (!wanted) return null;
+  const lower = wanted.toLowerCase();
+  return (
+    projects.find((p) => p.toLowerCase() === lower) ??
+    projects.find((p) => p.toLowerCase().includes(lower) || lower.includes(p.toLowerCase())) ??
+    wanted
+  );
+}
+
+const REMAINING = /\b(remains? (?:pending|open|outstanding|to be)|remaining|pending|follow[\s-]?ups?|still to|yet to|to be (?:deployed|tested|done))\b/i;
+
+/** A block's item without a model — the fields as written, the paragraph as the account. */
+function deterministicBlockItem(block: TaskBlock): Partial<ParsedItem> {
+  const text = block.body || block.title;
+  const done = DONE.test(text) || /\b(created|performed|enabled|removed|investigated|committed|documented|tested|verified|introduced|maintained|confirmed)\b/i.test(text);
+  const status = /\bblocked\b/i.test(text) ? 'BLOCKED' : done ? 'COMPLETED' : 'IN_PROGRESS';
+  const remaining = text.split(/(?<=[.!?])\s+/).filter((s) => REMAINING.test(s));
+
+  return {
+    ...deterministicItem(text),
+    title: block.title,
+    status,
+    progress: status === 'COMPLETED' ? 100 : status === 'BLOCKED' ? 40 : 50,
+    blockers: null,
+    next_steps: remaining.join(' ') || null,
+    confidence: 0.6,
+  };
+}
+
+/**
+ * One block, one item. What the employee wrote down wins over what the model
+ * inferred: the title, system, work type, priority, status, hours and
+ * reference all come from the block whenever it states them.
+ */
+function itemFromBlock(block: TaskBlock, raw: Partial<ParsedItem> | null, projects: string[]): ParsedItem {
+  const base = normaliseParsedItem(raw ?? deterministicBlockItem(block), {
+    group: null,
+    topic: null,
+    line: block.body || undefined,
+  });
+
+  const project = matchProject(block.project, projects) ?? base.project;
+  const workType = pickWorkType(block.work_type) ?? base.work_type;
+  const priority = pickPriority(block.priority) ?? base.priority;
+  const status = (block.status && readStatusCell(block.status)) || base.status;
+  const progress =
+    block.progress ?? (status === 'COMPLETED' ? 100 : status === 'TODO' ? 0 : base.progress || (status === 'BLOCKED' || status === 'WAITING' ? 40 : 50));
+
+  const written = new Set<string>(['title']);
+  if (block.project) written.add('project');
+  if (pickWorkType(block.work_type)) written.add('work_type');
+  if (pickPriority(block.priority)) written.add('priority');
+  if (block.status && readStatusCell(block.status)) written.add('status');
+  if (block.hours !== null) written.add('hours');
+
+  const reference = block.reference ? `Reference: ${block.reference}` : null;
+
+  return {
+    ...base,
+    title: oneLine(block.title).slice(0, 240) || base.title,
+    project,
+    topic: project ? composeTopic(project, null) : base.topic,
+    work_type: workType,
+    priority,
+    status,
+    progress: Math.max(0, Math.min(100, Math.round(progress))),
+    hours: block.hours ?? base.hours,
+    blockers: block.blockers ?? base.blockers,
+    next_steps: block.next_steps ?? base.next_steps,
+    outcome: block.outcome ?? base.outcome,
+    technical_notes: [base.technical_notes, reference].filter(Boolean).join(' — ').slice(0, 4000) || null,
+    commit_shas: block.commit_shas,
+    // The fields the block stated are read, not inferred, and the structure was
+    // spelled out by the employee — both raise how far the item can be trusted.
+    ai_generated_fields: base.ai_generated_fields.filter((f) => !written.has(f)),
+    confidence: raw ? Math.max(base.confidence, 0.85) : 0.7,
+  };
+}
+
+/**
+ * Writes up a list of task blocks, one item per block in the same order.
+ * A chunk the model does not answer one-for-one is filled from the blocks
+ * themselves, so no task is ever lost or given another task's write-up.
+ */
+async function writeUpTaskBlocks(
+  feature: string,
+  userId: number,
+  blocks: TaskBlock[],
+  context: { projects: string[] },
+): Promise<{ items: ParsedItem[]; aiChunks: number; chunks: number }> {
+  const chunks: TaskBlock[][] = [];
+  for (let i = 0; i < blocks.length; i += BLOCKS_PER_CHUNK) chunks.push(blocks.slice(i, i + BLOCKS_PER_CHUNK));
+
+  const responses = await mapWithConcurrency(chunks, 4, (chunk) =>
+    jsonCompletion<{ items: Array<Partial<ParsedItem>> }>(feature, userId, BLOCK_SYSTEM, buildBlockPrompt(chunk, context)),
+  );
+
+  const items: ParsedItem[] = [];
+  let aiChunks = 0;
+  chunks.forEach((chunk, i) => {
+    const returned = responses[i]?.items;
+    const aligned = !!returned && returned.length === chunk.length;
+    if (aligned) aiChunks++;
+    chunk.forEach((block, n) => items.push(itemFromBlock(block, aligned ? returned[n] : null, context.projects)));
+  });
+
+  return { items, aiChunks, chunks: chunks.length };
+}
+
 /**
  * Turns a pasted update into work items.
  *
@@ -581,6 +802,31 @@ export async function parseDailyUpdate(
   userId: number,
   context: { projects: string[]; openTasks: Array<{ task_number: string; title: string }> },
 ): Promise<AiResult<ParsedUpdate>> {
+  // A list of already-separated tasks is read block by block, not line by line.
+  const taskList = splitTaskBlocks(text);
+  if (taskList) {
+    const narrative: UpdateNarrative = { highlights: taskList.preamble.slice(0, 15), overall: null };
+    const { items, aiChunks, chunks } = await writeUpTaskBlocks('daily_update_parse', userId, taskList.blocks.slice(0, MAX_ITEMS), context);
+    const data = { items, narrative };
+    if (!aiChunks) {
+      return {
+        ok: false,
+        fallback: true,
+        data,
+        message: `${items.length} tasks found. AI write-up unavailable — each task kept its own title, type and priority; please review the detail before saving.`,
+      };
+    }
+    return {
+      ok: true,
+      fallback: aiChunks < chunks,
+      data,
+      message:
+        aiChunks < chunks
+          ? `${items.length} tasks found. Part of them were written up automatically — please review those items.`
+          : `${items.length} tasks found and written up. Review each item below — nothing is saved until you confirm.`,
+    };
+  }
+
   const sections = splitUpdateSections(text);
   const narrative = buildNarrative(sections.filter((s) => s.summaryOnly));
   const workSections = sections.filter((s) => !s.summaryOnly);
@@ -1168,6 +1414,8 @@ export interface TableRowInput {
   notes?: string | null;
   /** The sheet's own status. Authoritative: the model never overrides it. */
   status?: string | null;
+  /** The written-up task this row came from, when the paste was a task list. */
+  task?: TaskBlock | null;
 }
 
 /** Small enough that a chunk's reply never truncates mid-item. */
@@ -1242,7 +1490,7 @@ function chunkTableRows(rows: TableRowInput[]): TableRowInput[][] {
   return chunks;
 }
 
-/** Local grouping — ./tableUpdates is client-safe and not imported here. */
+/** Local grouping, kept apart from the client-side one in ./tableUpdates. */
 function groupByDate(rows: TableRowInput[]): Array<{ date: string; rows: TableRowInput[] }> {
   const byDate = new Map<string, TableRowInput[]>();
   for (const row of rows) {
@@ -1282,6 +1530,28 @@ export async function itemsFromTableRows(
 ): Promise<AiResult<Array<ParsedItem & { row: TableRowInput }>>> {
   if (!rows.length) {
     return { ok: false, fallback: true, data: [], message: 'No rows were found in that paste.' };
+  }
+
+  // A pasted task list carries far more than a grid row — its own title,
+  // system, type and priority — so it is written up block by block.
+  if (rows.every((row) => row.task)) {
+    const { items, aiChunks, chunks } = await writeUpTaskBlocks(
+      'daily_update_table',
+      userId,
+      rows.map((row) => row.task as TaskBlock),
+      context,
+    );
+    const data = items.map((item, i) => ({ ...settleRowStatus(item, rows[i]), row: rows[i] }));
+    return {
+      ok: aiChunks > 0,
+      fallback: aiChunks < chunks,
+      data,
+      message: !aiChunks
+        ? `${data.length} tasks read from the paste. AI write-up unavailable — each task kept its own title, type and priority; please review the detail before saving.`
+        : aiChunks < chunks
+          ? `${data.length} tasks read from the paste. Part of them were written up automatically — please review those items.`
+          : `${data.length} tasks read from the paste and written up in full. Nothing is saved until you confirm.`,
+    };
   }
 
   const chunks = chunkTableRows(rows);
