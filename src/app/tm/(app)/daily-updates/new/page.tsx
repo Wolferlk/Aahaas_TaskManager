@@ -55,6 +55,8 @@ interface ParsedItem {
   ai_generated_fields: string[];
   suggested_task: { id: number; task_number: string; title: string; confidence: number } | null;
   linked_action: 'NONE' | 'ATTACHED' | 'CREATED';
+  /** The task a saved item is already tied to, when a recorded day is reopened. */
+  task?: { id: number; task_number: string | null; title: string | null } | null;
   keep: boolean;
   project_id?: number | null;
   source?: 'AI' | 'GITHUB' | 'MANUAL';
@@ -106,6 +108,122 @@ const emptyDay = (): DayDetail => ({
   next_day_plan: '',
 });
 
+/** A day already on record, as the list endpoint returns it. */
+interface SavedDay {
+  id: number;
+  source: 'MANUAL' | 'AI_PARSED' | 'MIXED';
+  raw_text: string | null;
+  blockers: string | null;
+  mood: string | null;
+  is_auto_submitted: number | null;
+  detailed_summary: string | null;
+  highlights: string | null;
+  achievements: string | null;
+  challenges: string | null;
+  learnings: string | null;
+  collaboration: string | null;
+  next_day_plan: string | null;
+  focus_area: string | null;
+}
+
+interface SavedItem {
+  task_id: number | null;
+  task_number: string | null;
+  task_title: string | null;
+  topic: string | null;
+  title: string;
+  project_id: number | null;
+  project_name: string | null;
+  description: string | null;
+  work_type: string | null;
+  status: string | null;
+  priority: string | null;
+  progress: number | null;
+  start_time: string | null;
+  end_time: string | null;
+  hours: string | number | null;
+  blockers: string | null;
+  outcome: string | null;
+  tags: string | null;
+  confidence: string | number | null;
+  ai_generated: number | null;
+  linked_action: 'NONE' | 'ATTACHED' | 'CREATED' | null;
+  work_detail: string | null;
+  technical_notes: string | null;
+  impact: string | null;
+  next_steps: string | null;
+  collaborators: string | null;
+  repos: string | null;
+  links: unknown;
+  commit_shas: unknown;
+  commit_count: number | null;
+  additions: number | null;
+  deletions: number | null;
+  files_changed: number | null;
+  detail_source: ItemDetail['source'] | null;
+}
+
+/** JSON columns may arrive parsed or as text depending on the driver. */
+const jsonList = <T,>(v: unknown): T[] => {
+  if (Array.isArray(v)) return v as T[];
+  if (typeof v === 'string') {
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const num = (v: unknown): number | null => (v === null || v === undefined || v === '' ? null : Number(v));
+
+/** A stored item back in the shape the review form edits. */
+const fromSaved = (i: SavedItem): ParsedItem => ({
+  topic: i.topic,
+  title: i.title,
+  project: i.project_name,
+  project_id: i.project_id,
+  description: i.description,
+  work_type: i.work_type,
+  status: i.status ?? 'IN_PROGRESS',
+  priority: i.priority ?? 'MEDIUM',
+  progress: i.progress ?? 0,
+  start_time: i.start_time ? i.start_time.slice(0, 5) : null,
+  end_time: i.end_time ? i.end_time.slice(0, 5) : null,
+  hours: num(i.hours),
+  blockers: i.blockers,
+  outcome: i.outcome,
+  tags: (i.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean),
+  confidence: num(i.confidence) ?? 1,
+  ai_generated_fields: [],
+  suggested_task: null,
+  // The link was settled when the day was first recorded — reopening it keeps
+  // that choice rather than offering the match again. A link whose task has
+  // since gone is dropped, so re-saving never creates a replacement task.
+  linked_action: i.task_id ? (i.linked_action ?? 'NONE') : 'NONE',
+  task: i.task_id ? { id: i.task_id, task_number: i.task_number, title: i.task_title } : null,
+  keep: true,
+  source: i.detail_source ?? 'MANUAL',
+  expanded: false,
+  detail: {
+    work_detail: i.work_detail ?? '',
+    technical_notes: i.technical_notes ?? '',
+    impact: i.impact ?? '',
+    next_steps: i.next_steps ?? '',
+    collaborators: i.collaborators ?? '',
+    repos: i.repos ?? '',
+    links: jsonList<{ label: string; url: string }>(i.links),
+    commit_shas: jsonList<string>(i.commit_shas),
+    commit_count: i.commit_count,
+    additions: i.additions,
+    deletions: i.deletions,
+    files_changed: i.files_changed,
+    source: i.detail_source ?? 'MANUAL',
+  },
+});
+
 /** The days this person still owes, used to offer a one-tap catch-up. */
 interface Coverage {
   today: string;
@@ -152,6 +270,59 @@ function NewDailyUpdateForm() {
   } | null>(null);
   const toast = useToast();
   const router = useRouter();
+
+  // A date that is already on record opens that day for editing. Saving goes
+  // through the same upsert, so an edit replaces the day rather than adding one.
+  const { data: existingData, mutate: refreshExisting } = useSWR<{ updates: SavedDay[]; items: SavedItem[] }>(
+    `/api/tm/daily-updates?scope=mine&limit=1&date=${date}`,
+    fetcher,
+  );
+  const existing = existingData?.updates[0] ?? null;
+  /** The date whose saved record is currently loaded into the form. */
+  const [loadedDate, setLoadedDate] = useState<string | null>(null);
+  const editing = !!existing && loadedDate === date;
+  // Off by default: correcting a typo should not put a second copy of the day
+  // in everyone's inbox.
+  const [mailEdit, setMailEdit] = useState(false);
+
+  useEffect(() => {
+    // Moving off a loaded day clears it, so its items can never be saved
+    // against a different date.
+    if (loadedDate && loadedDate !== date) {
+      setItems([]);
+      setRawText('');
+      setBlockers('');
+      setMood('');
+      setDay(emptyDay());
+      setGithubMeta(null);
+      setParseMessage(null);
+      setLoadedDate(null);
+      return;
+    }
+    if (!existingData || !existing || loadedDate === date) return;
+    // Never overwrite something the person has already started typing.
+    if (items.length || rawText.trim()) return;
+
+    setItems(existingData.items.map(fromSaved));
+    setRawText(existing.raw_text ?? '');
+    setBlockers(existing.blockers ?? '');
+    setMood(existing.mood ?? '');
+    const loadedDay: DayDetail = {
+      focus_area: existing.focus_area ?? '',
+      detailed_summary: existing.detailed_summary ?? '',
+      highlights: existing.highlights ?? '',
+      achievements: existing.achievements ?? '',
+      challenges: existing.challenges ?? '',
+      learnings: existing.learnings ?? '',
+      collaboration: existing.collaboration ?? '',
+      next_day_plan: existing.next_day_plan ?? '',
+    };
+    setDay(loadedDay);
+    setShowDayDetail(false);
+    setMailEdit(false);
+    setMode('manual');
+    setLoadedDate(date);
+  }, [date, existing, existingData, loadedDate, items.length, rawText]);
 
   // Navigating from one missed day to another keeps this screen mounted, so
   // the picker has to follow the query string rather than only its initial value.
@@ -342,13 +513,14 @@ function NewDailyUpdateForm() {
         update_date: date,
         // Whatever was pasted — free-form text, or the tracker rows of this day.
         raw_text: rawText || null,
-        source: mode === 'manual' ? 'MANUAL' : 'AI_PARSED',
+        source: editing && existing ? existing.source : mode === 'manual' ? 'MANUAL' : 'AI_PARSED',
         status: 'SUBMITTED',
         blockers: blockers || null,
         mood: mood || null,
         detail: day,
+        ...(editing ? { send_mail: mailEdit } : {}),
         items: kept.map((i) => ({
-          task_id: i.suggested_task && i.linked_action === 'ATTACHED' ? i.suggested_task.id : null,
+          task_id: i.task?.id ?? (i.suggested_task && i.linked_action === 'ATTACHED' ? i.suggested_task.id : null),
           topic: i.topic,
           title: i.title,
           project_id: i.project_id ?? null,
@@ -371,7 +543,11 @@ function NewDailyUpdateForm() {
       });
       setSaved({ summary: res.summary, detailed_summary: res.detailed_summary, ai_used: res.ai_used, mail: res.mail });
       refreshCover();
-      toast({ kind: 'success', title: backfill ? 'Missed day recorded' : 'Daily update saved' });
+      refreshExisting();
+      toast({
+        kind: 'success',
+        title: editing ? 'Changes saved' : backfill ? 'Missed day recorded' : 'Daily update saved',
+      });
     } catch (err) {
       toast({ kind: 'error', title: err instanceof ApiClientError ? err.message : 'Could not save your update.' });
     } finally {
@@ -462,7 +638,7 @@ function NewDailyUpdateForm() {
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10">
               <CheckCircle2 className="h-7 w-7 text-emerald-500" />
             </div>
-            <h2 className="mt-4 text-lg font-semibold text-ink">Update saved</h2>
+            <h2 className="mt-4 text-lg font-semibold text-ink">{editing ? 'Changes saved' : 'Update saved'}</h2>
             <p className="mt-2 text-sm text-muted">{saved.summary}</p>
             {saved.detailed_summary && saved.detailed_summary !== saved.summary && (
               <div className="mt-4 whitespace-pre-line rounded-xl bg-line/25 p-4 text-left text-sm leading-relaxed text-muted">
@@ -524,8 +700,14 @@ function NewDailyUpdateForm() {
   return (
     <>
       <PageHeader
-        title={backfill ? 'Record a missed day' : 'Daily Update'}
-        subtitle={backfill ? 'A late entry is stored and emailed exactly like a same-day one' : 'Log what you worked on today'}
+        title={editing ? 'Edit daily update' : backfill ? 'Record a missed day' : 'Daily Update'}
+        subtitle={
+          editing
+            ? 'Correct what was recorded — saving replaces the day'
+            : backfill
+              ? 'A late entry is stored and emailed exactly like a same-day one'
+              : 'Log what you worked on today'
+        }
       />
       <PageBody className="mx-auto max-w-3xl space-y-5">
         {/* Which day is being recorded, stated before anything is typed. */}
@@ -562,7 +744,21 @@ function NewDailyUpdateForm() {
               )}
             </div>
 
-            {backfill && (
+            {editing && (
+              <p className="mt-3 flex items-start gap-1.5 rounded-xl bg-brand-soft px-3 py-2.5 text-xs leading-relaxed text-brand">
+                <NotebookPen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  <strong className="font-semibold">
+                    {fmtDate(date, { weekday: 'long', day: 'numeric', month: 'long' })}
+                  </strong>{' '}
+                  is already recorded
+                  {existing?.is_auto_submitted ? ' (filed automatically)' : ''}. Its items are loaded below — edit,
+                  add or remove them, then save to replace the day.
+                </span>
+              </p>
+            )}
+
+            {backfill && !editing && (
               <p className="mt-3 flex items-start gap-1.5 rounded-xl bg-amber-500/10 px-3 py-2.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 You are filling in{' '}
@@ -870,6 +1066,14 @@ function NewDailyUpdateForm() {
                     </div>
                   )}
 
+                  {item.task && (
+                    <p className="flex items-center gap-1.5 text-xs text-muted">
+                      <Link2 className="h-3.5 w-3.5 text-brand" />
+                      {item.linked_action === 'CREATED' ? 'Created' : 'Linked to'} {item.task.task_number ?? 'a task'}
+                      {item.task.title && <>: &ldquo;{item.task.title}&rdquo;</>}
+                    </p>
+                  )}
+
                   {item.suggested_task && (
                     <div className="rounded-xl border border-brand/25 bg-brand-soft/40 p-3">
                       <p className="flex items-center gap-1.5 text-xs font-medium text-brand">
@@ -942,7 +1146,9 @@ function NewDailyUpdateForm() {
                   <div className="space-y-3 rounded-xl border border-line bg-line/10 p-3.5">
                     <p className="flex items-start gap-1.5 text-xs text-muted">
                       <NotebookPen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                      Anything you leave blank is written for you from your work items — what you type here is kept exactly as written.
+                      {editing
+                        ? 'Loaded from the saved update. Clear a field to have it rewritten from your edited work items.'
+                        : 'Anything you leave blank is written for you from your work items — what you type here is kept exactly as written.'}
                     </p>
                     <div>
                       <Label className="text-xs">The day in detail</Label>
@@ -984,10 +1190,24 @@ function NewDailyUpdateForm() {
               </CardContent>
             </Card>
 
+            {editing && (
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-muted">
+                <input
+                  type="checkbox"
+                  checked={mailEdit}
+                  onChange={(e) => setMailEdit(e.target.checked)}
+                  className="h-4 w-4 accent-brand"
+                />
+                <Mail className="h-4 w-4" /> Email the corrected update to the usual recipients
+              </label>
+            )}
+
             <Button size="lg" className="w-full" onClick={save} loading={saving}>
-              {backfill
-                ? `Save the update for ${fmtDate(date, { day: 'numeric', month: 'short' })}`
-                : 'Save Daily Update'}
+              {editing
+                ? `Save changes to ${fmtDate(date, { day: 'numeric', month: 'short' })}`
+                : backfill
+                  ? `Save the update for ${fmtDate(date, { day: 'numeric', month: 'short' })}`
+                  : 'Save Daily Update'}
             </Button>
           </div>
         )}

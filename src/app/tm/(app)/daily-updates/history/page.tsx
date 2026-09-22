@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import useSWR from 'swr';
@@ -10,9 +11,9 @@ import { Select, Input } from '@/components/ui/Field';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState, Skeleton, Divider } from '@/components/ui/Misc';
 import { StatusBadge } from '@/components/ui/Badge';
-import { fmtDate } from '@/lib/format';
+import { fmtDate, toDateInput } from '@/lib/format';
 import { useSession } from '@/hooks/useSession';
-import { History, ChevronDown, ChevronRight, Bot, GitCommit, Users, UserRound, Building2 } from 'lucide-react';
+import { History, ChevronDown, ChevronRight, Bot, GitCommit, Users, UserRound, Building2, Pencil } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { OriginalText } from '@/components/tm/OriginalText';
 
@@ -48,6 +49,7 @@ interface Person {
 
 interface UpdateRow {
   id: number;
+  user_id: number;
   update_date: string;
   status: string;
   total_hours: string | null;
@@ -242,6 +244,16 @@ function DailyUpdateHistoryInner() {
                         <p className="text-xs text-faint">{fmtDate(u.update_date, { weekday: 'long', month: 'short', day: 'numeric' })} · {u.team_name ?? u.department_name ?? '—'}</p>
                       </div>
                       {u.total_hours && <span className="shrink-0 text-xs text-muted">{u.total_hours}h</span>}
+                      {/* Only the author can change a day; everyone else reads it. */}
+                      {u.user_id === user?.id && (
+                        <Link
+                          href={`/tm/daily-updates/new?date=${toDateInput(u.update_date)}`}
+                          className="focus-ring flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-brand hover:bg-brand-soft"
+                          title="Edit this day"
+                        >
+                          <Pencil className="h-3.5 w-3.5" /> Edit
+                        </Link>
+                      )}
                     </div>
                     {!!u.is_auto_submitted && (
                       <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-400">

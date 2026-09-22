@@ -224,7 +224,21 @@ export async function saveDailyUpdate(
   const autoSubmitted = !!ctx.autoSubmitted;
   const generatedBy = ctx.generatedBy ?? (autoSubmitted ? 'AUTO_GITHUB' : 'USER');
 
+  // Tasks this day had already moved forward before this save. Re-saving an
+  // edited day must not add its hours or log the attachment a second time.
+  const alreadyAttached = new Set<number>();
+  let isEdit = false;
+
   const updateId = await transaction(async (cx) => {
+    const [previous] = (await cx.query(
+      `SELECT i.task_id FROM tm_daily_updates d
+         LEFT JOIN tm_daily_update_items i ON i.daily_update_id = d.id AND i.linked_action = 'ATTACHED'
+        WHERE d.user_id = ? AND d.update_date = ?`,
+      [user.id, body.update_date],
+    )) as [Array<{ task_id: number | null }>, unknown];
+    isEdit = previous.length > 0;
+    for (const p of previous) if (p.task_id) alreadyAttached.add(p.task_id);
+
     const [res] = await cx.query(
       `INSERT INTO tm_daily_updates
          (user_id, update_date, raw_text, source, status, total_hours, blockers, mood, submitted_at)
@@ -289,7 +303,7 @@ export async function saveDailyUpdate(
           ],
         );
         taskId = (created as { insertId: number }).insertId;
-      } else if (item.linked_action === 'ATTACHED' && taskId) {
+      } else if (item.linked_action === 'ATTACHED' && taskId && !alreadyAttached.has(taskId)) {
         // Attaching only moves the task forward; it never rewrites its definition.
         await cx.query(
           `UPDATE tm_tasks
@@ -374,7 +388,7 @@ export async function saveDailyUpdate(
   // Task activity is logged outside the transaction so a logging hiccup
   // cannot roll back the user's saved update.
   for (const item of body.items) {
-    if (item.task_id && item.linked_action === 'ATTACHED') {
+    if (item.task_id && item.linked_action === 'ATTACHED' && !alreadyAttached.has(item.task_id)) {
       await logActivity(item.task_id, user.id, 'DAILY_UPDATE_ATTACHED', null, null, item.title);
     }
   }
@@ -468,7 +482,12 @@ export async function saveDailyUpdate(
     ],
   );
 
-  await audit(user.id, autoSubmitted ? 'DAILY_UPDATE_AUTO_SUBMITTED' : 'DAILY_UPDATE_SUBMITTED', 'DAILY_UPDATE', updateId, null, {
+  const auditAction = autoSubmitted
+    ? 'DAILY_UPDATE_AUTO_SUBMITTED'
+    : isEdit
+      ? 'DAILY_UPDATE_EDITED'
+      : 'DAILY_UPDATE_SUBMITTED';
+  await audit(user.id, auditAction, 'DAILY_UPDATE', updateId, null, {
     date: body.update_date,
     items: body.items.length,
     auto: autoSubmitted,
@@ -477,7 +496,7 @@ export async function saveDailyUpdate(
 
   // Mail is best-effort: a delivery failure is reported alongside a
   // successful save, never in place of it.
-  const shouldMail = ctx.sendMail ?? body.status === 'SUBMITTED';
+  const shouldMail = ctx.sendMail ?? body.send_mail ?? body.status === 'SUBMITTED';
   const mail = shouldMail
     ? await deliverDailyUpdateMail({
         user,

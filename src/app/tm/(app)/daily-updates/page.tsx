@@ -5,7 +5,7 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import {
   Plus, NotebookPen, ArrowRight, Flame, CalendarDays, CalendarPlus, Sparkles,
-  Users, Bot, PartyPopper, Clock3, ChevronDown, ChevronUp,
+  Users, Bot, PartyPopper, Clock3, ChevronDown, ChevronUp, Pencil,
 } from 'lucide-react';
 import { fetcher } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { EmptyState, Skeleton } from '@/components/ui/Misc';
 import { Avatar } from '@/components/ui/Avatar';
-import { fmtDate } from '@/lib/format';
+import { fmtDate, toDateInput } from '@/lib/format';
 import { useSession } from '@/hooks/useSession';
 import { cn } from '@/lib/cn';
 import { OriginalText } from '@/components/tm/OriginalText';
@@ -27,6 +27,7 @@ interface UpdateItem {
 
 interface UpdateRow {
   id: number;
+  user_id: number;
   update_date: string;
   status: string;
   total_hours: string | null;
@@ -202,8 +203,13 @@ export default function DailyUpdatesPage() {
                         {Number(day.date.slice(8, 10))}
                       </span>
                     );
-                    return day.state === 'MISSING' ? (
-                      <Link key={day.date} href={`/tm/daily-updates/new?date=${day.date}`} title={label}>
+                    // Missing days open to be filled in; recorded ones open to be edited.
+                    return day.state !== 'OFF' ? (
+                      <Link
+                        key={day.date}
+                        href={`/tm/daily-updates/new?date=${day.date}`}
+                        title={day.state === 'MISSING' ? label : `${label} — click to edit`}
+                      >
                         {square}
                       </Link>
                     ) : (
@@ -341,6 +347,15 @@ export default function DailyUpdatesPage() {
                     <span className="shrink-0 text-xs text-faint">
                       {u.total_hours ? `${u.total_hours}h logged` : `${u.item_count} items`}
                     </span>
+                    {u.user_id === user?.id && (
+                      <Link
+                        href={`/tm/daily-updates/new?date=${toDateInput(u.update_date)}`}
+                        className="focus-ring flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-brand hover:bg-brand-soft"
+                        title="Edit this day"
+                      >
+                        <Pencil className="h-3.5 w-3.5" /> Edit
+                      </Link>
+                    )}
                   </div>
                   {u.summary && <p className="mt-1.5 text-sm text-muted">{u.summary}</p>}
                   <div className="mt-3 flex flex-wrap items-center gap-1.5">

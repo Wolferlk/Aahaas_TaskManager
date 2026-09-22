@@ -272,6 +272,12 @@ export const dailyUpdateSchema = z.object({
   // A full end-of-day report is pasted as one document; every bullet in it
   // becomes an item, so the cap sits well above a typical day.
   items: z.array(dailyUpdateItemSchema).max(200),
+  /**
+   * Whether this save emails the update. Left out, a SUBMITTED day mails as it
+   * always has; an edit of an already-recorded day sends `false` unless the
+   * author asks for the corrected version to go out.
+   */
+  send_mail: z.boolean().optional(),
 });
 
 /**
