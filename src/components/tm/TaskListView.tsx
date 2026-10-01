@@ -10,7 +10,7 @@ import { PriorityBadge, StatusBadge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState, ProgressBar, Skeleton } from '@/components/ui/Misc';
 import { Select, SearchInput } from '@/components/ui/Field';
-import { fmtDueIn } from '@/lib/format';
+import { fmtDate, fmtDueIn } from '@/lib/format';
 import { TaskDrawer } from './TaskDrawer';
 
 interface TaskRow {
@@ -21,6 +21,8 @@ interface TaskRow {
   priority: string;
   progress: number;
   deadline: string | null;
+  created_at: string;
+  completed_at: string | null;
   assignee_id: number | null;
   assignee_name: string | null;
   assignee_avatar: string | null;
@@ -169,6 +171,7 @@ export function TaskListView({
                   <th className="px-3 py-2.5">Priority</th>
                   <th className="px-3 py-2.5">Status</th>
                   <th className="px-3 py-2.5">Progress</th>
+                  <th className="px-3 py-2.5">Created</th>
                   <th className="px-3 py-2.5">Deadline</th>
                 </tr>
               </thead>
@@ -203,10 +206,15 @@ export function TaskListView({
                       <td className="px-3 py-3 w-32">
                         <ProgressBar value={t.progress} />
                       </td>
-                      <td className="px-3 py-3">
-                        <span className={due.overdue ? 'text-xs font-medium text-red-500' : due.soon ? 'text-xs font-medium text-amber-600' : 'text-xs text-muted'}>
+                      <td className="whitespace-nowrap px-3 py-3">
+                        <p className="text-xs text-muted">{fmtDate(t.created_at)}</p>
+                        {t.completed_at && <p className="text-xs text-faint">Done {fmtDate(t.completed_at)}</p>}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-3">
+                        <p className={due.overdue ? 'text-xs font-medium text-red-500' : due.soon ? 'text-xs font-medium text-amber-600' : 'text-xs text-muted'}>
                           {due.label}
-                        </span>
+                        </p>
+                        {t.deadline && <p className="text-xs text-faint">{fmtDate(t.deadline)}</p>}
                       </td>
                     </tr>
                   );
@@ -224,10 +232,12 @@ export function TaskListView({
                     <p className="text-sm font-medium text-ink">{t.title}</p>
                     <PriorityBadge priority={t.priority as never} />
                   </div>
-                  <p className="text-xs text-faint">{t.task_number}</p>
+                  <p className="text-xs text-faint">{t.task_number} · Created {fmtDate(t.created_at)}</p>
                   <div className="flex items-center justify-between">
                     <StatusBadge status={t.status as never} />
-                    <span className={due.overdue ? 'text-xs font-medium text-red-500' : 'text-xs text-muted'}>{due.label}</span>
+                    <span className={due.overdue ? 'text-xs font-medium text-red-500' : 'text-xs text-muted'}>
+                      {due.label}{t.deadline ? ` · ${fmtDate(t.deadline)}` : ''}
+                    </span>
                   </div>
                   <ProgressBar value={t.progress} />
                 </button>
