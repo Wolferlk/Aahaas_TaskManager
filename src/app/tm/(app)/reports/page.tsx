@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
-import { Sparkles, Download, BarChart3 } from 'lucide-react';
+import { Sparkles, Download, BarChart3, FileSpreadsheet } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, LineChart, Line, CartesianGrid, PieChart, Pie, Cell,
 } from 'recharts';
@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Misc';
 import { useToast } from '@/components/ui/Toast';
+import { MonthlyExportModal } from '@/components/tm/MonthlyExportModal';
 
 interface ReportsData {
   overview: Record<string, number>;
@@ -30,6 +31,7 @@ export default function ReportsPage() {
   const { data, isLoading } = useSWR<ReportsData>('/api/tm/reports', fetcher);
   const [summary, setSummary] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [monthlyOpen, setMonthlyOpen] = useState(false);
   const toast = useToast();
 
   const generate = async () => {
@@ -56,11 +58,13 @@ export default function ReportsPage() {
         subtitle="Company-wide task and productivity analytics"
         actions={
           <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={() => exportCsv('tasks')}><Download className="h-4 w-4" /> Export Tasks</Button>
+            <Button size="sm" variant="secondary" onClick={() => setMonthlyOpen(true)}><FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Monthly Excel</Button>
+            <Button size="sm" variant="secondary" onClick={() => exportCsv('tasks')}><Download className="h-4 w-4" /> Export CSV</Button>
             <Button size="sm" onClick={generate} loading={generating}><Sparkles className="h-4 w-4" /> Weekly Summary</Button>
           </div>
         }
       />
+      <MonthlyExportModal open={monthlyOpen} onClose={() => setMonthlyOpen(false)} />
       <PageBody className="space-y-6">
         {isLoading && <Skeleton className="h-96" />}
 
