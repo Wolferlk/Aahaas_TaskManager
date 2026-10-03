@@ -762,7 +762,7 @@ function scorecardSheet(
     row.getCell(2 + off).font = font(10, C.ink, { bold: true });
     const target = opts.links?.get(g.key);
     if (target) {
-      row.getCell(2 + off).value = { text: g.label, hyperlink: sheetLink(target), tooltip: `Open ${g.label}’s tab` };
+      row.getCell(2 + off).value = sheetLink(target, g.label);
       row.getCell(2 + off).font = font(10, C.info, { bold: true, underline: true });
     }
     if (opts.ranked) row.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
@@ -1114,7 +1114,14 @@ const FIXED_SHEETS = ['Daily Activity', 'All Tasks', 'People', 'Projects', 'Team
 const MIN_CYCLE_DAYS = 10 / (24 * 60);
 const DAY_MS = 86_400_000;
 
-const sheetLink = (sheet: string) => `#'${sheet.replace(/'/g, "''")}'!A1`;
+/**
+ * A jump to another tab. Written as a HYPERLINK formula: ExcelJS's own internal
+ * links come out half-external, and the formula works in every spreadsheet app.
+ */
+function sheetLink(sheet: string, label: string): ExcelJS.CellFormulaValue {
+  const target = `#'${sheet.replace(/'/g, "''")}'!A1`.replace(/"/g, '""');
+  return { formula: `HYPERLINK("${target}","${label.replace(/"/g, '""')}")`, result: label };
+}
 
 /** Excel tab names: ≤ 31 chars, none of \ / ? * [ ] :, unique ignoring case. */
 function tabName(name: string, taken: Set<string>): string {
@@ -1142,8 +1149,8 @@ export function reportPeople(report: MonthlyReport): Person[] {
     found.set(id, p);
   };
   for (const t of report.tasks) {
-    see(t.assignee_id, t.assignee_name, t.assignee_role, t.team_name);
-    if (t.creator_role === 'LEADER' && t.created_by !== t.assignee_id) see(t.created_by, t.creator_name, t.creator_role, null);
+    see(t.assignee_id, t.assignee_name, t.assignee_role, t.assignee_team ?? t.team_name);
+    if (t.creator_role === 'LEADER' && t.created_by !== t.assignee_id) see(t.created_by, t.creator_name, t.creator_role, t.creator_team);
   }
   for (const d of report.dailyUpdates ?? []) {
     see(d.user_id, d.full_name, d.role, null);
@@ -1380,14 +1387,14 @@ function personSheet(wb: ExcelJS.Workbook, report: MonthlyReport, person: Person
     cell.value = { richText: [{ text: `${label}  `, font: font(8, C.muted, { bold: true }) }, { text: value, font: font(10, C.ink, { bold: true }) }] };
     cell.alignment = { vertical: 'middle', indent: 1 };
   };
-  chip(3, 5, 'TEAM', person.team ?? '—');
+  chip(3, 5, 'TEAM', person.team ?? 'No team');
   chip(6, 8, 'RANK', rankIdx >= 0 && ranking[rankIdx].completed
     ? `${rankIdx < 3 ? ['🥇', '🥈', '🥉'][rankIdx] + ' ' : ''}#${rankIdx + 1} of ${ranking.length} by completed`
     : 'No completions yet');
   const share = report.kpis.completed ? Math.round((k.completed / report.kpis.completed) * 100) : 0;
   chip(9, 11, 'SHARE', `${share}% of all completed work`);
   const back = merge(ws, row, 12, row, 13);
-  back.value = { text: '← All people', hyperlink: sheetLink('People'), tooltip: 'Back to the People scorecard' };
+  back.value = sheetLink('People', '← All people');
   back.font = font(9, C.info, { underline: true, bold: true });
   back.alignment = { horizontal: 'right', vertical: 'middle', indent: 1 };
 
@@ -1420,7 +1427,7 @@ function personSheet(wb: ExcelJS.Workbook, report: MonthlyReport, person: Person
   row = Math.max(endA, endB) + 1;
 
   // Personal calendar + at-a-glance tiles
-  sectionTitle(ws, row, 2, 9, 'Month at a glance', report.dailyUpdates ? '✓ completed  ·  h = hours in daily update' : '✓ completed  ·  + created');
+  sectionTitle(ws, row, 2, 9, 'Month at a glance', report.dailyUpdates ? '✓ completed  ·  h = daily-update hours  ·  ✎ = update, no hours' : '✓ completed  ·  + created');
   sectionTitle(ws, row, 11, 13, 'Quick facts');
   row++;
   const daily = dailySeries(assigned, range);
@@ -1460,7 +1467,7 @@ function personSheet(wb: ExcelJS.Workbook, report: MonthlyReport, person: Person
       const update = hoursByDay.get(d.day);
       const parts = [
         d.completed ? `✓ ${d.completed}` : '',
-        update ? `${round1(update.hours)}h` : report.dailyUpdates ? '' : d.created ? `+ ${d.created}` : '',
+        update ? (update.hours ? `${round1(update.hours)}h` : '✎') : report.dailyUpdates ? '' : d.created ? `+ ${d.created}` : '',
       ].filter(Boolean);
       cell.fill = fill(shade);
       cell.value = { richText: [

@@ -68,9 +68,12 @@ export interface ReportTask {
   assignee_id: number | null;
   assignee_name: string | null;
   assignee_role: string | null;
+  /** The assignee's own team, which can differ from the task's. */
+  assignee_team: string | null;
   created_by: number | null;
   creator_name: string | null;
   creator_role: string | null;
+  creator_team: string | null;
   project_id: number | null;
   project_name: string | null;
   project_health: string | null;
@@ -201,8 +204,8 @@ export async function loadTasks(
             ${CLOSED_SQL} AS closed_at,
             t.estimated_hours, t.actual_hours, t.blocked_reason, t.completion_notes,
             pt.task_number AS parent_number,
-            t.assignee_id, a.full_name AS assignee_name, a.role AS assignee_role,
-            t.created_by, c.full_name AS creator_name, c.role AS creator_role,
+            t.assignee_id, a.full_name AS assignee_name, a.role AS assignee_role, atm.name AS assignee_team,
+            t.created_by, c.full_name AS creator_name, c.role AS creator_role, ctm.name AS creator_team,
             t.project_id, p.name AS project_name, p.health AS project_health,
             t.team_id, tm.name AS team_name, d.name AS department_name,
             (SELECT GROUP_CONCAT(u.full_name ORDER BY u.full_name SEPARATOR ', ')
@@ -220,6 +223,8 @@ export async function loadTasks(
        FROM tm_tasks t
        LEFT JOIN tm_users a ON a.id = t.assignee_id
        LEFT JOIN tm_users c ON c.id = t.created_by
+       LEFT JOIN tm_teams atm ON atm.id = a.team_id
+       LEFT JOIN tm_teams ctm ON ctm.id = c.team_id
        LEFT JOIN tm_projects p ON p.id = t.project_id
        LEFT JOIN tm_teams tm ON tm.id = t.team_id
        LEFT JOIN tm_departments d ON d.id = t.department_id
