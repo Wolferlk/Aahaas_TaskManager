@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import {
   AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, ClipboardList, Download, FileSpreadsheet,
-  FolderKanban, HelpCircle, LayoutDashboard, NotebookPen, TrendingDown, TrendingUp, Users, UsersRound,
+  FolderKanban, HelpCircle, NotebookPen, UserRound, TrendingDown, TrendingUp, Users, UsersRound,
 } from 'lucide-react';
 import { fetcher } from '@/lib/client';
 import { cn } from '@/lib/cn';
@@ -39,6 +39,7 @@ interface Preview {
     teams: number;
     attention: number;
     daily_updates: number | null;
+    person_tabs: number;
   };
 }
 
@@ -287,7 +288,6 @@ export function MonthlyExportModal({ open, onClose }: { open: boolean; onClose: 
               <div>
                 <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">Inside the workbook</p>
                 <ul className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
-                  <SheetItem icon={LayoutDashboard} name="Overview" detail="KPIs & highlights" />
                   <SheetItem icon={CalendarDays} name="Daily Activity" detail="calendar heatmap" />
                   <SheetItem icon={ClipboardList} name="All Tasks" detail={`${data.sheets.tasks} rows`} />
                   <SheetItem icon={Users} name="People" detail={`${data.sheets.people} people`} />
@@ -298,6 +298,7 @@ export function MonthlyExportModal({ open, onClose }: { open: boolean; onClose: 
                     <SheetItem icon={NotebookPen} name="Daily Updates" detail={`${data.sheets.daily_updates} people`} />
                   )}
                   <SheetItem icon={HelpCircle} name="How to Read" detail="definitions" />
+                  <SheetItem icon={UserRound} name="A tab per person" detail={`${data.sheets.person_tabs} leaders & employees`} />
                 </ul>
               </div>
             </div>

@@ -8,7 +8,7 @@ import {
   parseMonth,
   type ReportFilters,
 } from '@/lib/monthlyReport';
-import { buildMonthlyWorkbook } from '@/lib/monthlyWorkbook';
+import { buildMonthlyWorkbook, reportPeople } from '@/lib/monthlyWorkbook';
 
 function idParam(sp: URLSearchParams, key: string): number | undefined {
   const raw = sp.get(key);
@@ -55,6 +55,7 @@ export async function GET(req: Request) {
           teams: new Set(tasks.map((t) => t.team_id ?? 0)).size,
           attention: tasks.filter((t) => isOpenAtEnd(t, range) && (isOverdueAtEnd(t, range) || t.status === 'BLOCKED')).length,
           daily_updates: report.dailyUpdates ? new Set(report.dailyUpdates.map((d) => d.user_id)).size : null,
+          person_tabs: reportPeople(report).length,
         },
       }, { headers: { 'Cache-Control': 'no-store' } });
     }

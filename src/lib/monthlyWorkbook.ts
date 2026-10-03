@@ -4,13 +4,16 @@ import {
   computeKpis,
   countBy,
   cycleDays,
+  dailySeries,
   groupStats,
+  isCompletedIn,
   isOpenAtEnd,
   isOverdueAtEnd,
   monthActivity,
   onTimeFlag,
   round1,
   toLocal,
+  type DailyUpdateRow,
   type GroupStats,
   type Kpis,
   type MonthlyReport,
@@ -19,9 +22,9 @@ import {
 
 /**
  * Renders a MonthlyReport as a designed workbook rather than a data dump:
- * a dashboard-style Overview, a calendar heatmap, the full task register and
- * per-person / project / team scorecards, a follow-up list and (optionally) a
- * daily-update hours heatmap.
+ * a calendar heatmap, the full task register, per-person / project / team
+ * scorecards, a follow-up list, (optionally) a daily-update hours heatmap and
+ * a dashboard tab for every leader and employee in the report.
  *
  * Everything visual is plain cell styling — fills, merged cells, unicode bars,
  * colour scales — so the file looks the same in Excel, Numbers, LibreOffice
@@ -256,7 +259,7 @@ function shortDate(d: Date) {
 }
 
 /* ------------------------------------------------------------------ *
- * Overview
+ * Shared dashboard pieces — KPI cards and breakdown tables
  * ------------------------------------------------------------------ */
 
 interface KpiCard {
@@ -368,7 +371,7 @@ function cards(k: Kpis, p: Kpis): KpiCard[] {
   ];
 }
 
-/** label | count | share | bar — the left or right half of the Overview. */
+/** label | count | share | bar — the left or right half of a person tab. */
 function breakdown(
   ws: ExcelJS.Worksheet,
   row: number,
@@ -409,153 +412,6 @@ function breakdown(
     r++;
   }
   return r;
-}
-
-function overviewSheet(wb: ExcelJS.Workbook, report: MonthlyReport) {
-  const ws = wb.addWorksheet('Overview', {
-    properties: { tabColor: { argb: C.brand } },
-    views: [{ showGridLines: false, zoomScale: 100 }],
-  });
-  const LAST = 14;
-  ws.columns = [{ width: 2.5 }, ...Array.from({ length: 12 }, () => ({ width: 11.5 })), { width: 2.5 }];
-  paintCanvas(ws, 90, LAST);
-
-  const { kpis: k, previousKpis: p, range, previous, tasks } = report;
-  const who = `${report.generatedBy.full_name} (${humanise(report.generatedBy.role)})`;
-  const generated = toLocal(report.generatedAt, range.tz).toISOString().slice(0, 16).replace('T', ' ');
-  banner(
-    ws,
-    report,
-    'Monthly Task Report',
-    `${range.label}  ·  Generated ${generated} by ${who}  ·  ${report.filterLabels.length ? report.filterLabels.join(' · ') : 'All tasks visible to you'}`,
-    LAST,
-  );
-
-  // KPI cards — two rows of four
-  const list = cards(k, p);
-  ws.getRow(6).height = 8;
-  [7, 12].forEach((top, rowIdx) => {
-    ws.getRow(top).height = 20;
-    ws.getRow(top + 1).height = 40;
-    ws.getRow(top + 2).height = 16;
-    ws.getRow(top + 3).height = 18;
-    for (let i = 0; i < 4; i++) drawCard(ws, top, 2 + i * 3, list[rowIdx * 4 + i], previous.shortLabel);
-  });
-  ws.getRow(11).height = 8;
-
-  // Status & priority
-  let row = 17;
-  ws.getRow(16).height = 8;
-  sectionTitle(ws, row, 2, 7, 'Status', 'as of today');
-  sectionTitle(ws, row, 8, 13, 'Priority mix');
-  row++;
-  const byStatus = countBy(tasks, (t) => t.status);
-  const statusRows = STATUS_ORDER.filter((s) => byStatus.get(s)).map((s) => ({
-    label: humanise(s), count: byStatus.get(s) ?? 0, pair: STATUS[s],
-  }));
-  const byPriority = countBy(tasks, (t) => t.priority);
-  const priorityRows = PRIORITY_ORDER.filter((s) => byPriority.get(s)).map((s) => ({
-    label: humanise(s), count: byPriority.get(s) ?? 0, pair: PRIORITY[s],
-  }));
-  const endA = breakdown(ws, row, 2, statusRows, tasks.length);
-  const endB = breakdown(ws, row, 8, priorityRows, tasks.length);
-  row = Math.max(endA, endB) + 1;
-
-  // Weekly rhythm & task types
-  sectionTitle(ws, row, 2, 7, 'Weekly rhythm', 'completed per week');
-  sectionTitle(ws, row, 8, 13, 'Kind of work');
-  row++;
-  const weeks: Array<{ label: string; count: number; color: string }> = [];
-  for (let start = 1; start <= range.days; start += 7) {
-    const end = Math.min(range.days, start + 6);
-    const slice = report.daily.slice(start - 1, end);
-    const done = slice.reduce((s, d) => s + d.completed, 0);
-    const created = slice.reduce((s, d) => s + d.created, 0);
-    weeks.push({
-      label: `W${Math.ceil(start / 7)} · ${start}–${end} ${range.shortLabel}  (+${created} new)`,
-      count: done,
-      color: C.good,
-    });
-  }
-  const totalDone = Math.max(1, weeks.reduce((s, w) => s + w.count, 0));
-  const byType = countBy(tasks, (t) => t.task_type);
-  const typeRows = [...byType.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([type, count]) => ({ label: humanise(type), count, color: C.info }));
-  const endC = breakdown(ws, row, 2, weeks, totalDone);
-  const endD = breakdown(ws, row, 8, typeRows, tasks.length);
-  row = Math.max(endC, endD) + 1;
-
-  // Highlights
-  sectionTitle(ws, row, 2, 13, 'Highlights', 'what stood out this month');
-  row++;
-  for (const line of highlights(report)) {
-    for (let c = 2; c <= 13; c++) ws.getCell(row, c).fill = fill(C.card);
-    const cell = merge(ws, row, 2, row, 13);
-    cell.value = { richText: [
-      { text: `${line.icon}  `, font: font(11) },
-      { text: line.title, font: font(10, C.ink, { bold: true }) },
-      { text: `  ${line.text}`, font: font(10, C.body) },
-    ] };
-    cell.alignment = { vertical: 'middle', indent: 1 };
-    cell.border = { bottom: thin() };
-    ws.getRow(row).height = 22;
-    row++;
-  }
-
-  row++;
-  const foot = merge(ws, row, 2, row, 13);
-  foot.value = 'Tip: every task ID in “All Tasks” links straight to the task in the app. Definitions are on the “How to Read” sheet.';
-  foot.font = font(9, C.muted, { italic: true });
-
-  printSetup(ws, report, false);
-}
-
-function highlights(report: MonthlyReport): Array<{ icon: string; title: string; text: string }> {
-  const { tasks, range, kpis: k } = report;
-  const out: Array<{ icon: string; title: string; text: string }> = [];
-  const people = groupStats(tasks.filter((t) => t.assignee_id), range, (t) => ({
-    key: String(t.assignee_id), label: t.assignee_name ?? 'Unknown',
-  }));
-
-  const top = people.find((p) => p.completed > 0);
-  if (top) out.push({ icon: '🏆', title: 'Top finisher', text: `${top.label} completed ${top.completed} task${top.completed === 1 ? '' : 's'}.` });
-
-  const fastest = people
-    .filter((p) => p.completed >= 3 && p.avgCycleDays !== null)
-    .sort((a, b) => (a.avgCycleDays ?? 0) - (b.avgCycleDays ?? 0))[0];
-  if (fastest) out.push({ icon: '⚡', title: 'Fastest turnaround', text: `${fastest.label} averaged ${duration(fastest.avgCycleDays!)} from start to done.` });
-
-  const reliable = people
-    .filter((p) => p.onTimeRate !== null && p.completed >= 3)
-    .sort((a, b) => (b.onTimeRate ?? 0) - (a.onTimeRate ?? 0) || b.completed - a.completed)[0];
-  if (reliable) out.push({ icon: '🎯', title: 'Most reliable', text: `${reliable.label} hit ${Math.round((reliable.onTimeRate ?? 0) * 100)}% of deadlines.` });
-
-  const busiest = [...report.daily].sort((a, b) => b.completed - a.completed)[0];
-  if (busiest?.completed) {
-    const weekday = busiest.date.toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'UTC' });
-    out.push({ icon: '🔥', title: 'Busiest day', text: `${weekday} ${shortDate(busiest.date)} — ${busiest.completed} tasks completed.` });
-  }
-
-  const projects = groupStats(tasks.filter((t) => t.project_id), range, (t) => ({
-    key: String(t.project_id), label: t.project_name ?? 'Unknown',
-  }));
-  if (projects[0]?.total) out.push({ icon: '📁', title: 'Most active project', text: `${projects[0].label} — ${projects[0].total} tasks, ${projects[0].completed} completed.` });
-
-  const overdueLead = [...people].sort((a, b) => b.overdue - a.overdue)[0];
-  if (overdueLead?.overdue) out.push({ icon: '⚠️', title: 'Needs support', text: `${overdueLead.label} has ${overdueLead.overdue} overdue task${overdueLead.overdue === 1 ? '' : 's'} at month end.` });
-
-  if (k.actualHours || k.estimatedHours) {
-    const ratio = k.estimatedHours ? Math.round((k.actualHours / k.estimatedHours) * 100) : null;
-    out.push({
-      icon: '⏱️', title: 'Effort',
-      text: `${k.actualHours} h logged against ${k.estimatedHours} h estimated on completed tasks${ratio !== null ? ` (${ratio}% of estimate)` : ''}.`,
-    });
-  }
-  if (k.reopened) out.push({ icon: '🔁', title: 'Rework', text: `${k.reopened} task${k.reopened === 1 ? ' was' : 's were'} reopened at least once.` });
-
-  if (!out.length) out.push({ icon: '🌱', title: 'Quiet month', text: 'No completed work to highlight yet.' });
-  return out;
 }
 
 /* ------------------------------------------------------------------ *
@@ -850,6 +706,8 @@ function scorecardSheet(
     groups: GroupStats[];
     ranked?: boolean;
     health?: boolean;
+    /** group key → sheet to link the name to */
+    links?: Map<string, string>;
   },
 ) {
   const ws = wb.addWorksheet(opts.name, {
@@ -902,6 +760,11 @@ function scorecardSheet(
       cell.alignment = { vertical: 'middle', horizontal: j <= off + 1 ? 'left' : 'center' };
     });
     row.getCell(2 + off).font = font(10, C.ink, { bold: true });
+    const target = opts.links?.get(g.key);
+    if (target) {
+      row.getCell(2 + off).value = { text: g.label, hyperlink: sheetLink(target), tooltip: `Open ${g.label}’s tab` };
+      row.getCell(2 + off).font = font(10, C.info, { bold: true, underline: true });
+    }
     if (opts.ranked) row.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
     if (opts.health && g.health) pill(row.getCell(3 + off), humanise(g.health), HEALTH[g.health]);
     row.getCell(5 + off).font = font(10, C.good, { bold: true });
@@ -961,7 +824,7 @@ function scorecardSheet(
 
   const note = merge(ws, totals + 2, 2, totals + 2, LAST - 1);
   note.value = opts.ranked
-    ? 'Ranked by tasks completed this month. Open at end = still open when the month closed. Completion and On time are shaded red → green.'
+    ? `Ranked by tasks completed this month. Open at end = still open when the month closed. Completion and On time are shaded red → green.${opts.links?.size ? ' Click a name to open that person’s tab.' : ''}`
     : 'Sorted by tasks completed this month. Completion and On time are shaded red → green.';
   note.font = font(9, C.muted, { italic: true });
 
@@ -1206,7 +1069,8 @@ function guideSheet(wb: ExcelJS.Workbook, report: MonthlyReport) {
     ['Deadline moved', 'Days between the original deadline and the current one. Positive = pushed later.'],
     ['Variance (h)', 'Actual hours − estimated hours. Red when over the estimate, green when under.'],
     ['Needs Attention', 'Open tasks ordered by urgency: overdue, blocked, due within 7 days of month end, then critical tasks under 50%.'],
-    ['Comparisons', `The ▲ / ▼ figures on the Overview compare against ${report.previous.label}, using the same filters.`],
+    ['Person tabs', 'One tab per leader (purple) and employee (blue) in the report, leaders first. Each shows that person’s cards, status and priority mix, a calendar of their month, highlights and every task they owned, collaborated on or delegated. Managers don’t get a tab.'],
+    ['Comparisons', `The ▲ / ▼ figures on each person tab compare that person against ${report.previous.label}, using the same filters.`],
   ];
   paintCanvas(ws, terms.length + 10, 4);
   banner(ws, report, 'How to Read This Report', 'Definitions for every number in the workbook.', 4);
@@ -1235,6 +1099,479 @@ function fmtOffset(tz: number): string {
 }
 
 /* ------------------------------------------------------------------ *
+ * Person tabs — one dashboard per leader and employee
+ * ------------------------------------------------------------------ */
+
+interface Person {
+  id: number;
+  name: string;
+  role: string;
+  team: string | null;
+  sheet: string;
+}
+
+const FIXED_SHEETS = ['Daily Activity', 'All Tasks', 'People', 'Projects', 'Teams', 'Needs Attention', 'Daily Updates', 'How to Read'];
+const MIN_CYCLE_DAYS = 10 / (24 * 60);
+const DAY_MS = 86_400_000;
+
+const sheetLink = (sheet: string) => `#'${sheet.replace(/'/g, "''")}'!A1`;
+
+/** Excel tab names: ≤ 31 chars, none of \ / ? * [ ] :, unique ignoring case. */
+function tabName(name: string, taken: Set<string>): string {
+  const base = name.replace(/[\\/?*[\]:]/g, ' ').replace(/^'+|'+$/g, '').replace(/\s+/g, ' ').trim().slice(0, 31) || 'Person';
+  let out = base;
+  for (let n = 2; taken.has(out.toLowerCase()); n++) {
+    const suffix = ` (${n})`;
+    out = base.slice(0, 31 - suffix.length).trimEnd() + suffix;
+  }
+  taken.add(out.toLowerCase());
+  return out;
+}
+
+/**
+ * Every leader and employee the report touches: assignees, daily-update
+ * authors and leaders who handed out work. Leaders first, then by name.
+ */
+export function reportPeople(report: MonthlyReport): Person[] {
+  const found = new Map<number, { name: string; role: string; team: string | null; teams: Map<string, number> }>();
+  const see = (id: number | null, name: string | null, role: string | null, team: string | null) => {
+    if (!id || !name || (role !== 'LEADER' && role !== 'EMPLOYEE')) return;
+    if (report.filters.assignee_id && id !== report.filters.assignee_id) return;
+    const p = found.get(id) ?? { name, role, team: null, teams: new Map<string, number>() };
+    if (team) p.teams.set(team, (p.teams.get(team) ?? 0) + 1);
+    found.set(id, p);
+  };
+  for (const t of report.tasks) {
+    see(t.assignee_id, t.assignee_name, t.assignee_role, t.team_name);
+    if (t.creator_role === 'LEADER' && t.created_by !== t.assignee_id) see(t.created_by, t.creator_name, t.creator_role, null);
+  }
+  for (const d of report.dailyUpdates ?? []) {
+    see(d.user_id, d.full_name, d.role, null);
+    const p = found.get(d.user_id);
+    if (p && d.team_name) p.team = d.team_name;
+  }
+
+  const taken = new Set(FIXED_SHEETS.map((s) => s.toLowerCase()));
+  return [...found.entries()]
+    .map(([id, p]) => ({
+      id,
+      name: p.name,
+      role: p.role,
+      team: p.team ?? [...p.teams.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
+    }))
+    .sort((a, b) => (a.role === b.role ? a.name.localeCompare(b.name) : a.role === 'LEADER' ? -1 : 1))
+    .map((p) => ({ ...p, sheet: tabName(p.name, taken) }));
+}
+
+function clip(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max - 1).trimEnd() + '…' : text;
+}
+
+/** Deadline outcome in words: on time / late for finished work, overdue / due-in for open work. */
+function timing(t: ReportTask, report: MonthlyReport): { text: string; color: string } | null {
+  const { range } = report;
+  if (t.status === 'COMPLETED' && t.completed_at) {
+    if (!t.deadline) return { text: '✓ Done', color: C.good };
+    const late = Math.ceil((t.completed_at.getTime() - t.deadline.getTime()) / DAY_MS);
+    return late > 0 ? { text: `✗ ${late} d late`, color: C.bad } : { text: '✓ On time', color: C.good };
+  }
+  if (!t.deadline || !isOpenAtEnd(t, range)) return null;
+  const now = new Date();
+  const cutoff = range.end < now ? range.end : now;
+  const diff = Math.ceil((t.deadline.getTime() - cutoff.getTime()) / DAY_MS);
+  if (isOverdueAtEnd(t, range)) return { text: `● ${Math.max(1, -diff)} d overdue`, color: C.bad };
+  return { text: diff <= 0 ? 'Due today' : `Due in ${diff} d`, color: diff <= 3 ? C.warn : C.muted };
+}
+
+/** A section of the person tab listing tasks; returns the next free row. */
+function personTasks(
+  ws: ExcelJS.Worksheet,
+  report: MonthlyReport,
+  row: number,
+  opts: { title: string; hint: string; tasks: ReportTask[]; third: 'Project' | 'Assignee'; empty?: string },
+): number {
+  if (!opts.tasks.length && !opts.empty) return row;
+  sectionTitle(ws, row, 2, 13, opts.title, opts.hint);
+  row++;
+  if (!opts.tasks.length) {
+    const cell = merge(ws, row, 2, row, 13);
+    cell.value = opts.empty!;
+    cell.font = font(9, C.faint, { italic: true });
+    return row + 2;
+  }
+
+  tableHeader(ws, row, 2, ['Task ID', 'Task', '', '', 'Status', 'Priority', opts.third, 'Deadline', 'Completed', 'Progress', 'Timing', 'Hours act / est']);
+  merge(ws, row, 3, row, 5).alignment = { vertical: 'middle', horizontal: 'left' };
+  row++;
+
+  const tz = report.range.tz;
+  opts.tasks.forEach((t, i) => {
+    const r = ws.getRow(row);
+    r.height = 20;
+    for (let c = 2; c <= 13; c++) {
+      bodyCell(r.getCell(c), i % 2 === 1);
+      r.getCell(c).alignment = { vertical: 'middle', horizontal: c <= 5 || c === 8 ? 'left' : 'center' };
+    }
+
+    const id = r.getCell(2);
+    id.value = { text: t.task_number, hyperlink: taskLink(t), tooltip: 'Open in Aahaas' };
+    id.font = font(10, C.info, { underline: true, bold: true });
+
+    const title = merge(ws, row, 3, row, 5);
+    title.value = clip(t.title, 60);
+    title.font = font(10, C.ink, { bold: true });
+    title.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+
+    pill(r.getCell(6), humanise(t.status), STATUS[t.status]);
+    pill(r.getCell(7), humanise(t.priority), PRIORITY[t.priority]);
+
+    const third = r.getCell(8);
+    third.value = clip((opts.third === 'Project' ? t.project_name : t.assignee_name) ?? '—', 20);
+    third.font = font(9, C.muted);
+
+    if (t.deadline) {
+      r.getCell(9).value = toLocal(t.deadline, tz);
+      r.getCell(9).numFmt = 'd mmm';
+    }
+    if (t.status === 'COMPLETED' && t.completed_at) {
+      r.getCell(10).value = toLocal(t.completed_at, tz);
+      r.getCell(10).numFmt = 'd mmm';
+    }
+
+    const progress = r.getCell(11);
+    progress.value = t.progress;
+    progress.numFmt = '0"%"';
+    progress.font = font(10, t.progress >= 100 ? C.good : t.progress >= 50 ? C.info : C.body, { bold: t.progress >= 100 });
+
+    const when = timing(t, report);
+    if (when) {
+      r.getCell(12).value = when.text;
+      r.getCell(12).font = font(9, when.color, { bold: true });
+    }
+
+    if (t.actual_hours !== null || t.estimated_hours !== null) {
+      r.getCell(13).value = `${t.actual_hours ?? '–'} / ${t.estimated_hours ?? '–'}`;
+      if (t.actual_hours !== null && t.estimated_hours !== null && t.actual_hours > t.estimated_hours) {
+        r.getCell(13).font = font(10, C.bad);
+      }
+    }
+    row++;
+  });
+  return row + 1;
+}
+
+function personHighlights(
+  person: Person,
+  report: MonthlyReport,
+  data: { assigned: ReportTask[]; k: Kpis; pk: Kpis; collab: ReportTask[]; delegated: ReportTask[]; updates: DailyUpdateRow[] },
+): Array<{ icon: string; title: string; text: string }> {
+  const { range, previous } = report;
+  const { assigned, k, pk, collab, delegated, updates } = data;
+  const first = person.name.split(' ')[0];
+  const out: Array<{ icon: string; title: string; text: string }> = [];
+
+  if (k.active) {
+    const diff = k.completed - pk.completed;
+    const vs = pk.active
+      ? diff === 0 ? ` Same as ${previous.label}.` : ` ${diff > 0 ? '▲' : '▼'} ${Math.abs(diff)} vs ${previous.label}.`
+      : '';
+    out.push({
+      icon: '🏁', title: 'Output',
+      text: `Completed ${k.completed} of ${k.active} task${k.active === 1 ? '' : 's'} in play${k.completionRate !== null ? ` (${Math.round(k.completionRate * 100)}%)` : ''}.${vs}`,
+    });
+  }
+  if (k.onTime + k.late) {
+    out.push({ icon: '🎯', title: 'Deadlines', text: `${k.onTime} of ${k.onTime + k.late} finished tasks beat their deadline.` });
+  }
+
+  const done = assigned
+    .filter((t) => isCompletedIn(t, range))
+    .map((t) => ({ t, days: cycleDays(t) }))
+    .filter((x): x is { t: ReportTask; days: number } => x.days !== null && x.days >= MIN_CYCLE_DAYS)
+    .sort((a, b) => a.days - b.days);
+  if (done.length) out.push({ icon: '⚡', title: 'Quickest finish', text: `“${clip(done[0].t.title, 70)}” in ${duration(done[0].days)}.` });
+  if (done.length > 1) {
+    const longest = done[done.length - 1];
+    out.push({ icon: '🏔️', title: 'Longest haul', text: `“${clip(longest.t.title, 70)}” took ${duration(longest.days)} start to finish.` });
+  }
+
+  const overdue = assigned
+    .filter((t) => isOverdueAtEnd(t, range))
+    .sort((a, b) => a.deadline!.getTime() - b.deadline!.getTime());
+  if (overdue.length) {
+    out.push({
+      icon: '⚠️', title: 'Needs a push',
+      text: `${overdue.length} open task${overdue.length === 1 ? ' is' : 's are'} past deadline — oldest is “${clip(overdue[0].title, 60)}”.`,
+    });
+  }
+
+  const pushed = assigned.filter((t) => t.deadline && t.original_deadline && t.deadline > t.original_deadline).length;
+  if (pushed) out.push({ icon: '📅', title: 'Deadlines moved', text: `${pushed} task${pushed === 1 ? ' had its deadline' : 's had their deadlines'} pushed later.` });
+  if (k.reopened) out.push({ icon: '🔁', title: 'Rework', text: `${k.reopened} task${k.reopened === 1 ? ' was' : 's were'} reopened at least once.` });
+
+  if (delegated.length) {
+    const people = new Set(delegated.map((t) => t.assignee_id ?? 0)).size;
+    const closed = delegated.filter((t) => isCompletedIn(t, range)).length;
+    out.push({
+      icon: '🧭', title: 'Delegation',
+      text: `Handed out ${delegated.length} task${delegated.length === 1 ? '' : 's'} to ${people} ${people === 1 ? 'person' : 'people'} — ${closed} completed this month.`,
+    });
+  }
+  if (collab.length) out.push({ icon: '🤝', title: 'Teamwork', text: `Collaborator on ${collab.length} task${collab.length === 1 ? '' : 's'} owned by others.` });
+
+  if (report.dailyUpdates) {
+    if (updates.length) {
+      const hours = round1(updates.reduce((s, u) => s + u.hours, 0));
+      const drafts = updates.filter((u) => u.status !== 'SUBMITTED').length;
+      out.push({
+        icon: '📝', title: 'Daily updates',
+        text: `${updates.length} filed, ${hours} h logged (${round1(hours / updates.length)} h a day)${drafts ? ` · ${drafts} still draft` : ''}.`,
+      });
+    } else {
+      out.push({ icon: '📝', title: 'Daily updates', text: `${first} didn’t file any daily updates in ${range.label}.` });
+    }
+  }
+
+  if (!out.length) out.push({ icon: '🌱', title: 'Quiet month', text: `Nothing assigned to ${first} in ${range.label} yet.` });
+  return out;
+}
+
+function personSheet(wb: ExcelJS.Workbook, report: MonthlyReport, person: Person, ranking: GroupStats[]) {
+  const { range, previous } = report;
+  const leader = person.role === 'LEADER';
+  const assigned = report.tasks.filter((t) => t.assignee_id === person.id);
+  const k = computeKpis(assigned, range);
+  const pk = computeKpis(report.history.filter((t) => t.assignee_id === person.id), previous);
+  const collab = report.tasks.filter(
+    (t) => t.assignee_id !== person.id && (t.collaborators ?? '').split(', ').includes(person.name),
+  );
+  const delegated = report.tasks.filter((t) => t.created_by === person.id && t.assignee_id !== person.id);
+  const updates = (report.dailyUpdates ?? []).filter((d) => d.user_id === person.id);
+  const accent = leader ? C.violet : 'FF0EA5E9';
+
+  const ws = wb.addWorksheet(person.sheet, {
+    properties: { tabColor: { argb: accent } },
+    views: [{ state: 'frozen', ySplit: 4, showGridLines: false }],
+  });
+  const LAST = 14;
+  ws.columns = [{ width: 2.5 }, { width: 19 }, ...Array.from({ length: 11 }, () => ({ width: 12.5 })), { width: 2.5 }];
+  paintCanvas(ws, 110 + assigned.length + collab.length + delegated.length, LAST);
+
+  const rankIdx = ranking.findIndex((g) => g.key === String(person.id));
+  banner(
+    ws, report, person.name,
+    `${humanise(person.role)}${person.team ? `  ·  ${person.team}` : ''}  ·  ${assigned.length} task${assigned.length === 1 ? '' : 's'} in ${range.label}`,
+    LAST,
+  );
+
+  // Profile strip
+  let row = 6;
+  ws.getRow(5).height = 8;
+  ws.getRow(row).height = 24;
+  for (let c = 2; c <= 13; c++) {
+    const cell = ws.getCell(row, c);
+    cell.fill = fill(C.card);
+    cell.border = { top: thin(), bottom: thin() };
+  }
+  const role = ws.getCell(row, 2);
+  pill(role, leader ? '★ Leader' : '● Employee', leader ? ['FFF3E8FF', 'FF7E22CE'] : ['FFE0F2FE', 'FF0369A1']);
+  const chip = (c1: number, c2: number, label: string, value: string) => {
+    const cell = merge(ws, row, c1, row, c2);
+    cell.value = { richText: [{ text: `${label}  `, font: font(8, C.muted, { bold: true }) }, { text: value, font: font(10, C.ink, { bold: true }) }] };
+    cell.alignment = { vertical: 'middle', indent: 1 };
+  };
+  chip(3, 5, 'TEAM', person.team ?? '—');
+  chip(6, 8, 'RANK', rankIdx >= 0 && ranking[rankIdx].completed
+    ? `${rankIdx < 3 ? ['🥇', '🥈', '🥉'][rankIdx] + ' ' : ''}#${rankIdx + 1} of ${ranking.length} by completed`
+    : 'No completions yet');
+  const share = report.kpis.completed ? Math.round((k.completed / report.kpis.completed) * 100) : 0;
+  chip(9, 11, 'SHARE', `${share}% of all completed work`);
+  const back = merge(ws, row, 12, row, 13);
+  back.value = { text: '← All people', hyperlink: sheetLink('People'), tooltip: 'Back to the People scorecard' };
+  back.font = font(9, C.info, { underline: true, bold: true });
+  back.alignment = { horizontal: 'right', vertical: 'middle', indent: 1 };
+
+  // KPI cards — two rows of four, compared with the person's previous month
+  const list = cards(k, pk);
+  ws.getRow(7).height = 8;
+  [8, 13].forEach((top, rowIdx) => {
+    ws.getRow(top).height = 20;
+    ws.getRow(top + 1).height = 40;
+    ws.getRow(top + 2).height = 16;
+    ws.getRow(top + 3).height = 18;
+    for (let i = 0; i < 4; i++) drawCard(ws, top, 2 + i * 3, list[rowIdx * 4 + i], previous.shortLabel);
+  });
+  ws.getRow(12).height = 8;
+  ws.getRow(17).height = 8;
+
+  // Status & priority
+  row = 18;
+  sectionTitle(ws, row, 2, 7, 'Status', 'as of today');
+  sectionTitle(ws, row, 8, 13, 'Priority mix');
+  row++;
+  const byStatus = countBy(assigned, (t) => t.status);
+  const byPriority = countBy(assigned, (t) => t.priority);
+  const endA = breakdown(ws, row, 2, STATUS_ORDER.filter((s) => byStatus.get(s)).map((s) => ({
+    label: humanise(s), count: byStatus.get(s) ?? 0, pair: STATUS[s],
+  })), assigned.length);
+  const endB = breakdown(ws, row, 8, PRIORITY_ORDER.filter((s) => byPriority.get(s)).map((s) => ({
+    label: humanise(s), count: byPriority.get(s) ?? 0, pair: PRIORITY[s],
+  })), assigned.length);
+  row = Math.max(endA, endB) + 1;
+
+  // Personal calendar + at-a-glance tiles
+  sectionTitle(ws, row, 2, 9, 'Month at a glance', report.dailyUpdates ? '✓ completed  ·  h = hours in daily update' : '✓ completed  ·  + created');
+  sectionTitle(ws, row, 11, 13, 'Quick facts');
+  row++;
+  const daily = dailySeries(assigned, range);
+  const hoursByDay = new Map(updates.map((u) => [Number(u.day.slice(8, 10)), u]));
+  ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach((n, i) => {
+    const cell = ws.getCell(row, 2 + i);
+    cell.value = n;
+    cell.fill = fill(i >= 6 ? 'FF374151' : C.header);
+    cell.font = font(9, 'FFFFFFFF', { bold: true });
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+  ws.getRow(row).height = 20;
+  row++;
+
+  const max = Math.max(1, ...daily.map((d) => d.completed));
+  const firstWeekday = (daily[0].date.getUTCDay() + 6) % 7;
+  const weeks = Math.ceil((firstWeekday + range.days) / 7);
+  for (let w = 0; w < weeks; w++) {
+    ws.getRow(row + w).height = 40;
+    const label = ws.getCell(row + w, 2);
+    label.value = `Week ${w + 1}`;
+    label.fill = fill(C.card);
+    label.font = font(9, C.muted, { bold: true });
+    label.alignment = { horizontal: 'center', vertical: 'middle' };
+    label.border = { bottom: thin() };
+    for (let i = 0; i < 7; i++) {
+      const cell = ws.getCell(row + w, 3 + i);
+      const idx = w * 7 + i - firstWeekday;
+      cell.border = { top: thin('FFFFFFFF'), left: thin('FFFFFFFF'), right: thin('FFFFFFFF'), bottom: thin('FFFFFFFF') };
+      if (idx < 0 || idx >= range.days) {
+        cell.fill = fill('FFEEF1F5');
+        continue;
+      }
+      const d = daily[idx];
+      const shade = heat(HEAT_GREEN, d.completed, max);
+      const strong = HEAT_GREEN.indexOf(shade) >= HEAT_GREEN.length - 2;
+      const update = hoursByDay.get(d.day);
+      const parts = [
+        d.completed ? `✓ ${d.completed}` : '',
+        update ? `${round1(update.hours)}h` : report.dailyUpdates ? '' : d.created ? `+ ${d.created}` : '',
+      ].filter(Boolean);
+      cell.fill = fill(shade);
+      cell.value = { richText: [
+        { text: `${d.day}\n`, font: font(10, strong ? 'FFFFFFFF' : C.ink, { bold: true }) },
+        { text: parts.length ? parts.join('  ') : '·', font: font(8, strong ? 'FFF0FDF4' : C.muted) },
+      ] };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    }
+  }
+
+  // Quick-fact tiles, one per calendar week row
+  const hoursLogged = round1(updates.reduce((s, u) => s + u.hours, 0));
+  const busiest = [...daily].sort((a, b) => b.completed - a.completed)[0];
+  const facts: Array<[string, string, string]> = [
+    ...(report.dailyUpdates
+      ? [
+        ['Hours logged', updates.length ? `${hoursLogged} h · ${updates.length} days` : 'No updates filed', C.violet],
+        ['Average day', updates.length ? `${round1(hoursLogged / updates.length)} h` : '—', C.violet],
+      ] as Array<[string, string, string]>
+      : []),
+    ['Busiest day', busiest?.completed
+      ? `${busiest.date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })} · ${busiest.completed} done`
+      : '—', C.good],
+    ['Deadlines met', k.onTime + k.late ? `${k.onTime} of ${k.onTime + k.late}` : '—', C.good],
+    ['Effort vs estimate', k.estimatedHours || k.actualHours ? `${k.actualHours} h / ${k.estimatedHours} h` : '—', C.warn],
+    ['Collaborating on', `${collab.length} task${collab.length === 1 ? '' : 's'}`, C.info],
+    ['Delegated', `${delegated.length} task${delegated.length === 1 ? '' : 's'}`, C.brand],
+    ['Open at month end', `${k.carriedOver} · ${k.overdue} overdue`, C.bad],
+  ];
+  facts.slice(0, weeks).forEach(([label, value, color], i) => {
+    for (let c = 11; c <= 13; c++) {
+      const cell = ws.getCell(row + i, c);
+      cell.fill = fill(C.card);
+      cell.border = { bottom: thin(), left: c === 11 ? { style: 'thick', color: { argb: color } } : undefined, right: c === 13 ? thin() : undefined };
+    }
+    const cell = merge(ws, row + i, 11, row + i, 13);
+    cell.value = { richText: [
+      { text: `${label.toUpperCase()}\n`, font: font(8, C.muted, { bold: true }) },
+      { text: value, font: font(12, C.ink, { bold: true }) },
+    ] };
+    cell.alignment = { vertical: 'middle', wrapText: true, indent: 1 };
+  });
+  row += weeks + 1;
+
+  // Kind of work & projects
+  sectionTitle(ws, row, 2, 7, 'Kind of work');
+  sectionTitle(ws, row, 8, 13, 'Projects');
+  row++;
+  const byType = [...countBy(assigned, (t) => t.task_type).entries()].sort((a, b) => b[1] - a[1]);
+  const byProject = [...countBy(assigned, (t) => t.project_name ?? 'No project').entries()].sort((a, b) => b[1] - a[1]);
+  const endC = breakdown(ws, row, 2, byType.map(([type, count]) => ({ label: humanise(type), count, color: C.info })), assigned.length);
+  const endD = breakdown(ws, row, 8, byProject.slice(0, 8).map(([name, count]) => ({ label: clip(name, 26), count, color: 'FFF59E0B' })), assigned.length);
+  row = Math.max(endC, endD) + 1;
+
+  // Highlights
+  sectionTitle(ws, row, 2, 13, 'Highlights', `what stood out for ${person.name.split(' ')[0]}`);
+  row++;
+  for (const line of personHighlights(person, report, { assigned, k, pk, collab, delegated, updates })) {
+    for (let c = 2; c <= 13; c++) ws.getCell(row, c).fill = fill(C.card);
+    const cell = merge(ws, row, 2, row, 13);
+    cell.value = { richText: [
+      { text: `${line.icon}  `, font: font(11) },
+      { text: line.title, font: font(10, C.ink, { bold: true }) },
+      { text: `  ${line.text}`, font: font(10, C.body) },
+    ] };
+    cell.alignment = { vertical: 'middle', indent: 1 };
+    cell.border = { bottom: thin() };
+    ws.getRow(row).height = 22;
+    row++;
+  }
+  row++;
+
+  // Task lists
+  const now = new Date();
+  const completed = assigned
+    .filter((t) => isCompletedIn(t, range))
+    .sort((a, b) => b.completed_at!.getTime() - a.completed_at!.getTime());
+  const open = assigned
+    .filter((t) => isOpenAtEnd(t, range))
+    .sort((a, b) => Number(isOverdueAtEnd(b, range, now)) - Number(isOverdueAtEnd(a, range, now))
+      || PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority)
+      || (a.deadline?.getTime() ?? Infinity) - (b.deadline?.getTime() ?? Infinity));
+  const dropped = assigned.filter((t) => !isCompletedIn(t, range) && !isOpenAtEnd(t, range));
+
+  row = personTasks(ws, report, row, {
+    title: `✓ Completed this month (${completed.length})`, hint: 'newest first', tasks: completed, third: 'Project',
+    empty: 'Nothing completed this month yet.',
+  });
+  row = personTasks(ws, report, row, {
+    title: `○ Still open at month end (${open.length})`, hint: 'overdue first, then by priority', tasks: open, third: 'Project',
+    empty: 'Nothing left open — a clean slate. 🎉',
+  });
+  row = personTasks(ws, report, row, {
+    title: `✗ Closed without completing (${dropped.length})`, hint: 'cancelled or rejected', tasks: dropped, third: 'Project',
+  });
+  row = personTasks(ws, report, row, {
+    title: `🤝 Collaborating on (${collab.length})`, hint: 'owned by someone else', tasks: collab, third: 'Assignee',
+  });
+  row = personTasks(ws, report, row, {
+    title: `🧭 Delegated to others (${delegated.length})`, hint: `created by ${person.name.split(' ')[0]}, assigned to someone else`,
+    tasks: delegated, third: 'Assignee',
+  });
+
+  const foot = merge(ws, row, 2, row, 13);
+  foot.value = `Cards compare with ${previous.label}. Task IDs open the task in the app. Definitions are on the “How to Read” sheet.`;
+  foot.font = font(9, C.muted, { italic: true });
+
+  printSetup(ws, report, false);
+}
+
+/* ------------------------------------------------------------------ *
  * Entry point
  * ------------------------------------------------------------------ */
 
@@ -1251,7 +1588,11 @@ export async function buildMonthlyWorkbook(report: MonthlyReport): Promise<Buffe
 
   const { tasks, range } = report;
 
-  overviewSheet(wb, report);
+  const people = reportPeople(report);
+  const ranking = groupStats(tasks.filter((t) => t.assignee_id), range, (t) => ({
+    key: String(t.assignee_id), label: t.assignee_name ?? 'Unknown',
+  }));
+
   activitySheet(wb, report);
   tasksSheet(wb, report);
   scorecardSheet(wb, report, {
@@ -1262,6 +1603,7 @@ export async function buildMonthlyWorkbook(report: MonthlyReport): Promise<Buffe
     first: 'Person',
     second: 'Team',
     ranked: true,
+    links: new Map(people.map((p) => [String(p.id), p.sheet])),
     groups: groupStats(tasks, range, (t) => ({
       key: String(t.assignee_id ?? 'none'),
       label: t.assignee_name ?? 'Unassigned',
@@ -1298,6 +1640,7 @@ export async function buildMonthlyWorkbook(report: MonthlyReport): Promise<Buffe
   attentionSheet(wb, report);
   if (report.dailyUpdates) dailyUpdatesSheet(wb, report);
   guideSheet(wb, report);
+  for (const person of people) personSheet(wb, report, person, ranking);
 
   const out = await wb.xlsx.writeBuffer();
   return Buffer.from(out as ArrayBuffer);

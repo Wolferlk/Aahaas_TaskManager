@@ -67,7 +67,10 @@ export interface ReportTask {
   parent_number: string | null;
   assignee_id: number | null;
   assignee_name: string | null;
+  assignee_role: string | null;
+  created_by: number | null;
   creator_name: string | null;
+  creator_role: string | null;
   project_id: number | null;
   project_name: string | null;
   project_health: string | null;
@@ -87,6 +90,7 @@ export interface ReportTask {
 export interface DailyUpdateRow {
   user_id: number;
   full_name: string;
+  role: string;
   team_name: string | null;
   day: string; // YYYY-MM-DD
   hours: number;
@@ -197,7 +201,8 @@ export async function loadTasks(
             ${CLOSED_SQL} AS closed_at,
             t.estimated_hours, t.actual_hours, t.blocked_reason, t.completion_notes,
             pt.task_number AS parent_number,
-            t.assignee_id, a.full_name AS assignee_name, c.full_name AS creator_name,
+            t.assignee_id, a.full_name AS assignee_name, a.role AS assignee_role,
+            t.created_by, c.full_name AS creator_name, c.role AS creator_role,
             t.project_id, p.name AS project_name, p.health AS project_health,
             t.team_id, tm.name AS team_name, d.name AS department_name,
             (SELECT GROUP_CONCAT(u.full_name ORDER BY u.full_name SEPARATOR ', ')
@@ -232,6 +237,7 @@ export async function loadTasks(
     estimated_hours: num(r.estimated_hours),
     actual_hours: num(r.actual_hours),
     assignee_id: num(r.assignee_id),
+    created_by: num(r.created_by),
     project_id: num(r.project_id),
     team_id: num(r.team_id),
     subtask_count: Number(r.subtask_count ?? 0),
@@ -275,7 +281,7 @@ export async function loadDailyUpdates(
   const next = r.month === 12 ? `${r.year + 1}-01-01` : `${r.year}-${String(r.month + 1).padStart(2, '0')}-01`;
 
   const rows = await query<Record<string, unknown>>(
-    `SELECT u.id AS user_id, u.full_name, tm.name AS team_name,
+    `SELECT u.id AS user_id, u.full_name, u.role, tm.name AS team_name,
             DATE_FORMAT(du.update_date, '%Y-%m-%d') AS day,
             COALESCE(du.total_hours,
               (SELECT SUM(i.hours) FROM tm_daily_update_items i WHERE i.daily_update_id = du.id), 0) AS hours,
@@ -292,6 +298,7 @@ export async function loadDailyUpdates(
   return rows.map((row) => ({
     user_id: Number(row.user_id),
     full_name: String(row.full_name),
+    role: String(row.role),
     team_name: (row.team_name as string | null) ?? null,
     day: String(row.day),
     hours: Number(row.hours ?? 0),
@@ -482,6 +489,8 @@ export interface MonthlyReport {
   filters: ReportFilters;
   filterLabels: string[];
   tasks: ReportTask[];
+  /** Every task loaded, including ones only alive last month — for per-person comparisons. */
+  history: ReportTask[];
   kpis: Kpis;
   previousKpis: Kpis;
   daily: DailyPoint[];
@@ -512,6 +521,7 @@ export async function buildMonthlyReport(
     filters,
     filterLabels: labels,
     tasks,
+    history: all,
     kpis: computeKpis(all, range),
     previousKpis: computeKpis(all, previous),
     daily: dailySeries(tasks, range),
