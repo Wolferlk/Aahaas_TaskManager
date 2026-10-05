@@ -62,6 +62,7 @@ interface MemberTask {
   progress: number;
   task_type: string;
   deadline: string | null;
+  created_at: string;
   completed_at: string | null;
   updated_at: string;
   blocked_reason: string | null;
@@ -358,8 +359,12 @@ function TaskRow({ task, onOpen }: { task: MemberTask; onOpen: () => void }) {
                 due.overdue ? 'font-medium text-red-500' : due.soon ? 'text-amber-500' : 'text-faint',
               )}
             >
-              {due.label}
+              {due.label} · {fmtDate(task.deadline)}
             </span>
+          )}
+          <span className="text-[11px] text-faint">Created {fmtDate(task.created_at)}</span>
+          {task.completed_at && (
+            <span className="text-[11px] text-faint">Done {fmtDate(task.completed_at)}</span>
           )}
           {task.checklist_count > 0 && (
             <span className="flex items-center gap-1 text-[11px] text-faint">
