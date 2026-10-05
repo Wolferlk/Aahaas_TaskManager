@@ -4,6 +4,7 @@ import { forbidden, intParam, parseBody, requireUser, searchParams, toErrorRespo
 import { dailyUpdateSchema } from '@/lib/validation';
 import { dailyUpdateScope, saveDailyUpdate } from '@/lib/dailyUpdates';
 import { awardBadgesQuietly } from '@/lib/badges';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 /**
  * Reading Daily Updates.
@@ -106,7 +107,7 @@ export async function GET(req: Request) {
           `SELECT u.id, u.full_name, u.email, u.avatar_url, u.role, u.job_title, t.name AS team_name
              FROM tm_users u
              LEFT JOIN tm_teams t ON t.id = u.team_id
-            WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE'
+            WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE' AND ${hideDevAdmin('u')}
               ${scope.userIds === null ? '' : 'AND u.id IN (?)'}
             ORDER BY u.full_name`,
           scope.userIds === null ? [] : [scope.userIds],

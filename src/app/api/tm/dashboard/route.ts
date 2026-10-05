@@ -4,6 +4,7 @@ import { requireUser, toErrorResponse } from '@/lib/api';
 import { focusScore, ledTeamIds } from '@/lib/tasks';
 import { computeMetrics, getWeights, scoreFromMetrics } from '@/lib/performance';
 import type { Priority, TaskStatus } from '@/lib/types';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 const TASK_FIELDS = `t.id, t.task_number, t.title, t.status, t.priority, t.progress, t.deadline,
   t.estimated_hours, t.project_id, t.assignee_id,
@@ -133,7 +134,7 @@ export async function GET() {
            FROM tm_users u
            LEFT JOIN tm_tasks t ON t.assignee_id = u.id AND t.deleted_at IS NULL
                 AND t.status NOT IN ('COMPLETED','CANCELLED')
-          WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL ${teamFilter}
+          WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')} ${teamFilter}
           GROUP BY u.id, u.full_name, u.avatar_url, u.availability, u.job_title
           ORDER BY remaining_hours DESC
           LIMIT 25`,

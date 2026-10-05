@@ -4,6 +4,7 @@ import { forbidden, intParam, notFound, requireUser, searchParams, toErrorRespon
 import { canViewMember, missingUpdateDays } from '@/lib/members';
 import { taskMemberScopeCheck } from '@/lib/tasks';
 import { TASK_STATUSES, type TaskStatus } from '@/lib/types';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -57,7 +58,7 @@ export async function GET(req: Request, { params }: Ctx) {
          LEFT JOIN tm_departments d ON d.id = u.department_id
          LEFT JOIN tm_teams t ON t.id = u.team_id
          LEFT JOIN tm_users l ON l.id = t.leader_user_id
-        WHERE u.id = ? AND u.deleted_at IS NULL`,
+        WHERE u.id = ? AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}`,
       [id],
     );
     if (!user) throw notFound('That person could not be found.');

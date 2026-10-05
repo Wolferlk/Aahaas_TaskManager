@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { forbidden, requireUser, searchParams, toErrorResponse } from '@/lib/api';
 import { memberScope, memberWhere } from '@/lib/members';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 /**
  * The supervision roster: every person the caller may open, with the live
@@ -28,7 +29,7 @@ export async function GET(req: Request) {
     const viewer = Number(me.id);
     const visible = `AND (k.is_personal = 0 AND k.visibility <> 'PRIVATE' OR u.id = ${viewer})`;
 
-    const where: string[] = ["u.deleted_at IS NULL", "u.status = 'ACTIVE'", gate.sql];
+    const where: string[] = ["u.deleted_at IS NULL", "u.status = 'ACTIVE'", hideDevAdmin('u'), gate.sql];
     const params: unknown[] = [...gate.params];
 
     const q = sp.get('q');

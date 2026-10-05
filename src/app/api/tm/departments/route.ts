@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { execute, query, queryOne } from '@/lib/db';
 import { audit, parseBody, requirePermission, requireUser, toErrorResponse } from '@/lib/api';
 import { departmentSchema } from '@/lib/validation';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 export async function GET() {
   try {
@@ -10,7 +11,7 @@ export async function GET() {
       `SELECT d.*,
               m.full_name AS manager_name,
               (SELECT COUNT(*) FROM tm_teams t WHERE t.department_id = d.id AND t.deleted_at IS NULL) AS team_count,
-              (SELECT COUNT(*) FROM tm_users u WHERE u.department_id = d.id AND u.status = 'ACTIVE' AND u.deleted_at IS NULL) AS member_count,
+              (SELECT COUNT(*) FROM tm_users u WHERE u.department_id = d.id AND u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}) AS member_count,
               (SELECT COUNT(*) FROM tm_tasks tk WHERE tk.department_id = d.id AND tk.deleted_at IS NULL
                  AND tk.status NOT IN ('COMPLETED','CANCELLED')) AS open_tasks
          FROM tm_departments d

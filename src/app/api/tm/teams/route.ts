@@ -3,6 +3,7 @@ import { execute, query, queryOne, transaction } from '@/lib/db';
 import { audit, parseBody, requirePermission, requireUser, toErrorResponse } from '@/lib/api';
 import { teamSchema } from '@/lib/validation';
 import { notify } from '@/lib/notifications';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 export async function GET() {
   try {
@@ -11,7 +12,7 @@ export async function GET() {
       `SELECT t.*, d.name AS department_name, d.code AS department_code,
               l.full_name AS leader_name, l.avatar_url AS leader_avatar,
               (SELECT COUNT(*) FROM tm_users u
-                WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL
+                WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}
                   AND (u.team_id = t.id
                        OR EXISTS (SELECT 1 FROM tm_team_members m
                                    WHERE m.team_id = t.id AND m.user_id = u.id AND m.is_active = 1))) AS member_count,

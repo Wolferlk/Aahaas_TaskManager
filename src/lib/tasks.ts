@@ -1,6 +1,7 @@
 import 'server-only';
 import { execute, query, queryOne, type PoolConnection } from './db';
 import type { Priority, SessionUser, TaskStatus } from './types';
+import { hideDevAdmin } from './devAdmin';
 
 /* ------------------------------------------------------------------ *
  * Task numbering
@@ -62,7 +63,7 @@ export async function teamMemberIds(userId: number): Promise<number[]> {
   if (!teams.length) return [];
   const rows = await query<{ id: number }>(
     `SELECT DISTINCT u.id FROM tm_users u
-      WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE' AND u.role <> 'MANAGER'
+      WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE' AND u.role <> 'MANAGER' AND ${hideDevAdmin('u')}
         AND (u.team_id IN (?) OR EXISTS (SELECT 1 FROM tm_team_members m
               WHERE m.user_id = u.id AND m.is_active = 1 AND m.team_id IN (?)))`,
     [teams, teams],

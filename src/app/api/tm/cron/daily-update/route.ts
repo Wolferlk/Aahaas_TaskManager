@@ -4,6 +4,7 @@ import { queryOne } from '@/lib/db';
 import { badRequest, forbidden, requireUser, searchParams, toErrorResponse, unauthorized } from '@/lib/api';
 import { getAutoConfig, localDate, recentAutoRuns, runAutoDailyUpdates } from '@/lib/autoDailyUpdate';
 import { getSessionUser } from '@/lib/auth';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 /**
  * The cut-off sweep, exposed as an endpoint.
@@ -93,7 +94,7 @@ export async function GET(req: Request) {
          FROM tm_users u
          JOIN tm_github_connections gc ON gc.user_id = u.id AND gc.is_active = 1
          LEFT JOIN tm_daily_updates du ON du.user_id = u.id AND du.update_date = ?
-        WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL
+        WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}
           AND (du.id IS NULL OR du.status <> 'SUBMITTED')
           AND EXISTS (SELECT 1 FROM tm_github_repos r WHERE r.user_id = u.id AND r.is_selected = 1)`,
       [date],

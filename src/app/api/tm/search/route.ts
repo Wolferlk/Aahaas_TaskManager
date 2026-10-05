@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { requireUser, searchParams, toErrorResponse } from '@/lib/api';
 import { taskScope } from '@/lib/tasks';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 /** Global search across the module. Task numbers resolve to a direct hit. */
 export async function GET(req: Request) {
@@ -29,7 +30,7 @@ export async function GET(req: Request) {
       query(
         `SELECT id, full_name, email, role, avatar_url, job_title
            FROM tm_users
-          WHERE status = 'ACTIVE' AND deleted_at IS NULL
+          WHERE status = 'ACTIVE' AND deleted_at IS NULL AND ${hideDevAdmin()}
             AND (full_name LIKE ? OR email LIKE ? OR job_title LIKE ?)
           LIMIT 8`,
         [like, like, like],

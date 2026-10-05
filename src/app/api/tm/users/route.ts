@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { intParam, requireUser, searchParams, toErrorResponse } from '@/lib/api';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 /** Directory listing. Password hashes are never selected here. */
 export async function GET(req: Request) {
@@ -8,7 +9,7 @@ export async function GET(req: Request) {
     const me = await requireUser();
     const sp = searchParams(req);
 
-    const where: string[] = ['u.deleted_at IS NULL'];
+    const where: string[] = ['u.deleted_at IS NULL', hideDevAdmin('u')];
     const params: unknown[] = [];
 
     const status = sp.get('status');

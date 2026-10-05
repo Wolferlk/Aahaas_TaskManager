@@ -3,6 +3,7 @@ import { query, queryOne } from '@/lib/db';
 import { forbidden, requireUser, searchParams, toErrorResponse } from '@/lib/api';
 import { ledTeamIds } from '@/lib/tasks';
 import { weeklyManagerSummary } from '@/lib/ai';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 /**
  * Reporting dashboard. Every figure is a live aggregate over tm_tasks — the
@@ -117,7 +118,7 @@ export async function GET(req: Request) {
              FROM tm_users u
              LEFT JOIN tm_daily_updates d ON d.user_id = u.id AND d.status = 'SUBMITTED'
                   AND d.update_date >= (CURDATE() - INTERVAL 30 DAY)
-            WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL
+            WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}
             GROUP BY u.id, u.full_name ORDER BY updates DESC LIMIT 25`,
         ),
       ]);

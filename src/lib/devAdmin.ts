@@ -10,6 +10,15 @@ import { hashPassword } from './auth';
 export const DEV_ADMIN_EMAIL = 'admin@aahaas.com';
 const DEV_ADMIN_PASSWORD = 'admin@123';
 
+/**
+ * SQL condition that leaves the dev admin out of people lists, pickers,
+ * counts and reports, so it never shows up as a real member. Pass the
+ * tm_users alias when the query uses one.
+ */
+export function hideDevAdmin(alias?: string) {
+  return `${alias ? `${alias}.` : ''}email <> '${DEV_ADMIN_EMAIL}'`;
+}
+
 export function isDevAdminLogin(email: string, password: string) {
   return (
     process.env.NODE_ENV !== 'production' &&

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { audit, requirePermission, searchParams, toErrorResponse } from '@/lib/api';
 import { ledTeamIds, taskScope } from '@/lib/tasks';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 /** RFC 4180 escaping, with a guard against spreadsheet formula injection. */
 function csvCell(value: unknown): string {
@@ -114,7 +115,7 @@ export async function GET(req: Request) {
                 AND t.status NOT IN ('COMPLETED','CANCELLED')
            LEFT JOIN tm_departments d ON d.id = u.department_id
            LEFT JOIN tm_teams tm ON tm.id = u.team_id
-          WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL
+          WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}
           GROUP BY u.id, u.full_name, d.name, tm.name, u.role
           ORDER BY COUNT(t.id) DESC`,
       );

@@ -1,5 +1,6 @@
 import 'server-only';
 import { execute, query } from './db';
+import { hideDevAdmin } from './devAdmin';
 
 /**
  * Notification abstraction. Today it writes in-app rows only; an email or push
@@ -79,7 +80,7 @@ export async function taskStakeholderIds(task: {
 /** Every Manager, used for signup approvals and escalations. */
 export async function managerIds(): Promise<number[]> {
   const rows = await query<{ id: number }>(
-    "SELECT id FROM tm_users WHERE role = 'MANAGER' AND status = 'ACTIVE' AND deleted_at IS NULL",
+    `SELECT id FROM tm_users WHERE role = 'MANAGER' AND status = 'ACTIVE' AND deleted_at IS NULL AND ${hideDevAdmin()}`,
   );
   return rows.map((r) => r.id);
 }

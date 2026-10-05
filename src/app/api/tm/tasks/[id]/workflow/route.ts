@@ -13,6 +13,7 @@ import {
 } from '@/lib/tasks';
 import { notify } from '@/lib/notifications';
 import { awardBadgesQuietly } from '@/lib/badges';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -105,7 +106,7 @@ export async function POST(req: Request, { params }: Ctx) {
       }
       case 'escalate': {
         const managers = await queryOne<{ id: number }>(
-          "SELECT id FROM tm_users WHERE role = 'MANAGER' AND status = 'ACTIVE' AND deleted_at IS NULL LIMIT 1",
+          `SELECT id FROM tm_users WHERE role = 'MANAGER' AND status = 'ACTIVE' AND deleted_at IS NULL AND ${hideDevAdmin()} LIMIT 1`,
         );
         await logActivity(id, user.id, 'ESCALATED', null, null, body.comment ?? null);
         if (managers) {

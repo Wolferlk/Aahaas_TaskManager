@@ -4,6 +4,7 @@ import { collectGithubDay } from './githubActivity';
 import { saveDailyUpdate, type DailyUpdatePayload } from './dailyUpdates';
 import { notify } from './notifications';
 import type { SessionUser } from './types';
+import { hideDevAdmin } from './devAdmin';
 
 /**
  * Unattended Daily Update submission.
@@ -176,7 +177,7 @@ export async function runAutoDailyUpdates(opts: {
        LEFT JOIN tm_departments dep ON dep.id = u.department_id
        LEFT JOIN tm_teams t ON t.id = u.team_id
        LEFT JOIN tm_daily_updates du ON du.user_id = u.id AND du.update_date = ?
-      WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL
+      WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}
         AND (du.id IS NULL OR du.status <> 'SUBMITTED')
         AND EXISTS (SELECT 1 FROM tm_github_repos r WHERE r.user_id = u.id AND r.is_selected = 1)
       ORDER BY u.id

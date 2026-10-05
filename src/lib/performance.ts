@@ -1,5 +1,6 @@
 import 'server-only';
 import { query, queryOne } from './db';
+import { hideDevAdmin } from './devAdmin';
 
 /**
  * Transparent performance scoring.
@@ -273,7 +274,7 @@ export async function leaderboard(year: number, month: number, limit = 20) {
        FROM tm_users u
        LEFT JOIN tm_departments d ON d.id = u.department_id
        LEFT JOIN tm_teams t ON t.id = u.team_id
-      WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL`,
+      WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}`,
   );
   const weights = await getWeights();
   const rows = await Promise.all(

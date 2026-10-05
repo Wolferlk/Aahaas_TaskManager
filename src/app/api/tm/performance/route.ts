@@ -4,6 +4,7 @@ import { forbidden, requireUser, searchParams, toErrorResponse } from '@/lib/api
 import { computeMetrics, getWeights, scoreFromMetrics } from '@/lib/performance';
 import { interpretPerformance } from '@/lib/ai';
 import { teamMemberIds } from '@/lib/tasks';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -66,7 +67,7 @@ export async function GET(req: Request) {
                FROM tm_users u
                LEFT JOIN tm_departments d ON d.id = u.department_id
                LEFT JOIN tm_teams t ON t.id = u.team_id
-              WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL
+              WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}
               ORDER BY FIELD(u.role,'MANAGER','LEADER','EMPLOYEE'), u.full_name`,
           )
         : await query(
@@ -75,7 +76,7 @@ export async function GET(req: Request) {
                FROM tm_users u
                LEFT JOIN tm_departments d ON d.id = u.department_id
                LEFT JOIN tm_teams t ON t.id = u.team_id
-              WHERE u.id IN (?) AND u.deleted_at IS NULL
+              WHERE u.id IN (?) AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}
               ORDER BY FIELD(u.role,'MANAGER','LEADER','EMPLOYEE'), u.full_name`,
             [viewableIds],
           );

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { requireUser, searchParams, toErrorResponse } from '@/lib/api';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 /**
  * Reference data for pickers. `?public=1` returns only the department and team
@@ -40,7 +41,7 @@ export async function GET(req: Request) {
         `SELECT u.id, u.full_name, u.email, u.role, u.avatar_url, u.department_id, u.team_id,
                 u.job_title, u.availability
            FROM tm_users u
-          WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL
+          WHERE u.status = 'ACTIVE' AND u.deleted_at IS NULL AND ${hideDevAdmin('u')}
           ORDER BY u.full_name`,
       ),
       query('SELECT id, name, color FROM tm_task_tags ORDER BY name LIMIT 200'),

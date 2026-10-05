@@ -19,6 +19,7 @@ import {
   type MailRoute,
 } from '@/lib/dailyMail';
 import { graphConfigured, senderAddress, verifyGraph } from '@/lib/graphMail';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 /**
  * Daily-task auto-send mail management.
@@ -66,7 +67,7 @@ export async function GET(req: Request) {
          FROM tm_users u
          LEFT JOIN tm_teams t ON t.id = u.team_id
          LEFT JOIN tm_daily_mail_prefs p ON p.user_id = u.id
-        WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE'
+        WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE' AND ${hideDevAdmin('u')}
           ${canManage ? '' : 'AND u.id = ?'}
         ORDER BY u.full_name`,
       canManage ? [] : [user.id],

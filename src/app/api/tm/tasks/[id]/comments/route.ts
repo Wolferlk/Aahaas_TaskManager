@@ -4,6 +4,7 @@ import { audit, notFound, parseBody, requireUser, toErrorResponse } from '@/lib/
 import { commentSchema } from '@/lib/validation';
 import { logActivity, taskScope } from '@/lib/tasks';
 import { notify } from '@/lib/notifications';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -13,7 +14,7 @@ async function resolveMentions(body: string): Promise<number[]> {
   if (!handles.length) return [];
 
   const users = await query<{ id: number; full_name: string; email: string }>(
-    "SELECT id, full_name, email FROM tm_users WHERE status = 'ACTIVE' AND deleted_at IS NULL",
+    `SELECT id, full_name, email FROM tm_users WHERE status = 'ACTIVE' AND deleted_at IS NULL AND ${hideDevAdmin()}`,
   );
   const matched = new Set<number>();
   for (const handle of handles) {

@@ -4,6 +4,7 @@ import { execute, query, queryOne } from '@/lib/db';
 import { audit, notFound, parseBody, requirePermission, requireUser, toErrorResponse } from '@/lib/api';
 import { teamSchema } from '@/lib/validation';
 import { notify } from '@/lib/notifications';
+import { hideDevAdmin } from '@/lib/devAdmin';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -30,7 +31,7 @@ export async function GET(_req: Request, { params }: Ctx) {
                  AND tk.status NOT IN ('COMPLETED','CANCELLED')
                  AND tk.deadline IS NOT NULL AND tk.deadline < NOW()) AS overdue_tasks
          FROM tm_users u
-        WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE'
+        WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE' AND ${hideDevAdmin('u')}
           -- tm_users.team_id is only somebody's primary team. Membership rows
           -- have to be read too or half the roster is missing here while the
           -- team card counts them.
