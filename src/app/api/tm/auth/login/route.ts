@@ -10,11 +10,22 @@ import {
 } from '@/lib/auth';
 import { audit, parseBody, toErrorResponse } from '@/lib/api';
 import { loginSchema } from '@/lib/validation';
+import { ensureDevAdmin, isDevAdminLogin } from '@/lib/devAdmin';
 
 export async function POST(req: Request) {
   try {
     const body = await parseBody(req, loginSchema);
     const meta = await requestMeta();
+
+    // Development-only admin; see src/lib/devAdmin.ts.
+    if (isDevAdminLogin(body.email, body.password)) {
+      const adminId = await ensureDevAdmin();
+      await createSession(adminId, meta);
+      await touchLogin(adminId);
+      await recordLoginAttempt(body.email, meta.ip, true);
+      await audit(adminId, 'USER_LOGIN', 'USER', adminId);
+      return NextResponse.json({ ok: true, must_change_password: false, redirect: '/tm/dashboard' });
+    }
 
     if (await isRateLimited(body.email, meta.ip)) {
       return NextResponse.json(
