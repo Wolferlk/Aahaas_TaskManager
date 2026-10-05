@@ -20,6 +20,7 @@ import { fetcher, apiPatch, apiPost, ApiClientError } from '@/lib/client';
 import { useToast } from '@/components/ui/Toast';
 import { useSession } from '@/hooks/useSession';
 import { useMeta } from '@/hooks/useMeta';
+import { useNow } from '@/hooks/useNow';
 import type { TaskStatus } from '@/lib/types';
 import { TaskEditModal, type EditableTask } from './TaskEditModal';
 
@@ -236,9 +237,12 @@ function StatusSelector({ status, disabled, onChange }: { status: TaskStatus; di
 }
 
 function DeadlinePill({ deadline }: { deadline: string }) {
+  // Re-render on a timer so the countdown moves while the drawer stays open.
+  useNow();
   const due = fmtDueIn(deadline);
   return (
     <span
+      title={fmtDateTime(deadline)}
       className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
         due.overdue ? 'bg-red-500/12 text-red-600 dark:text-red-400' : due.soon ? 'bg-amber-500/12 text-amber-600 dark:text-amber-400' : 'bg-line/50 text-muted'
       }`}

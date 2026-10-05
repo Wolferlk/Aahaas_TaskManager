@@ -186,6 +186,16 @@ export async function PATCH(req: Request, { params }: Ctx) {
       else push(k, v);
     }
 
+    // The first deadline is kept for reporting, however often it moves later.
+    if (
+      changes.deadline !== undefined &&
+      before.deadline &&
+      new Date(before.deadline).getTime() !== (changes.deadline ? new Date(changes.deadline).getTime() : NaN)
+    ) {
+      fields.push('`original_deadline` = COALESCE(`original_deadline`, ?)');
+      values.push(new Date(before.deadline));
+    }
+
     if (nextStatus === 'COMPLETED') {
       push('completed_at', new Date());
       push('progress', 100);
