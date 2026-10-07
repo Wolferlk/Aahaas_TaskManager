@@ -5,7 +5,8 @@ import { hashPassword } from './auth';
 
 /**
  * Hard-coded development admin. It signs in as an active MANAGER, which holds
- * every permission in rbac.ts. Never honoured when NODE_ENV is 'production'.
+ * every permission in rbac.ts. Honoured outside production builds, or on any
+ * server (e.g. the dev deployment) that sets TM_DEV_ADMIN=on.
  */
 export const DEV_ADMIN_EMAIL = 'admin@aahaas.com';
 const DEV_ADMIN_PASSWORD = 'admin@123';
@@ -21,7 +22,7 @@ export function hideDevAdmin(alias?: string) {
 
 export function isDevAdminLogin(email: string, password: string) {
   return (
-    process.env.NODE_ENV !== 'production' &&
+    (process.env.NODE_ENV !== 'production' || process.env.TM_DEV_ADMIN === 'on') &&
     email === DEV_ADMIN_EMAIL &&
     password === DEV_ADMIN_PASSWORD
   );
