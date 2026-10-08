@@ -5,6 +5,7 @@ import { dailyUpdateSchema } from '@/lib/validation';
 import { dailyUpdateScope, saveDailyUpdate } from '@/lib/dailyUpdates';
 import { awardBadgesQuietly } from '@/lib/badges';
 import { hideDevAdmin } from '@/lib/devAdmin';
+import { onlineWorkTablesReady } from '@/lib/onlineWork';
 
 /**
  * Reading Daily Updates.
@@ -63,6 +64,10 @@ export async function GET(req: Request) {
     }
 
     const limit = intParam(sp, 'limit', 30, 200);
+    const fromOnlineWork = (await onlineWorkTablesReady())
+      ? `EXISTS (SELECT 1 FROM tm_online_work_filings owf
+                  WHERE owf.daily_update_id = d.id AND owf.outcome = 'SYNCED')`
+      : '0';
 
     // The long-form detail rides along with each update, so a reader never has
     // to fetch a second endpoint to see what the day actually contained.
@@ -72,7 +77,8 @@ export async function GET(req: Request) {
               (SELECT COUNT(*) FROM tm_daily_update_items i WHERE i.daily_update_id = d.id) AS item_count,
               dd.detailed_summary, dd.highlights, dd.achievements, dd.challenges, dd.learnings,
               dd.collaboration, dd.next_day_plan, dd.focus_area, dd.work_breakdown, dd.metrics,
-              dd.github_metrics, dd.generated_by, dd.is_auto_submitted, dd.needs_review, dd.ai_used
+              dd.github_metrics, dd.generated_by, dd.is_auto_submitted, dd.needs_review, dd.ai_used,
+              ${fromOnlineWork} AS from_online_work
          FROM tm_daily_updates d
          JOIN tm_users u ON u.id = d.user_id
          LEFT JOIN tm_teams t ON t.id = u.team_id

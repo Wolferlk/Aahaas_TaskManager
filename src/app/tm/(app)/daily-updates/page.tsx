@@ -5,7 +5,7 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import {
   Plus, NotebookPen, ArrowRight, Flame, CalendarDays, CalendarPlus, Sparkles,
-  Users, Bot, PartyPopper, Clock3, ChevronDown, ChevronUp, Pencil,
+  Users, Bot, PartyPopper, Clock3, ChevronDown, ChevronUp, Pencil, Link2,
 } from 'lucide-react';
 import { fetcher } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
@@ -37,6 +37,7 @@ interface UpdateRow {
   full_name: string;
   avatar_url: string | null;
   is_auto_submitted: number | null;
+  from_online_work?: number | null;
 }
 
 interface CalendarDay {
@@ -341,6 +342,11 @@ export default function DailyUpdatesPage() {
                       {!!u.is_auto_submitted && (
                         <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
                           <Bot className="h-3 w-3" /> Filed automatically
+                        </span>
+                      )}
+                      {!!u.from_online_work && (
+                        <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold text-sky-600 dark:text-sky-400">
+                          <Link2 className="h-3 w-3" /> From Online Work
                         </span>
                       )}
                     </div>

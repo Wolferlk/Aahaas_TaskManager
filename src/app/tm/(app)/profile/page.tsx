@@ -13,6 +13,7 @@ import { Input, Label, Select, FieldError } from '@/components/ui/Field';
 import { PhoneInput } from '@/components/ui/PhoneInput';
 import { ProgressBar, ProgressRing, Skeleton } from '@/components/ui/Misc';
 import { AvatarUpload } from '@/components/tm/AvatarUpload';
+import { OnlineWorkLink } from '@/components/tm/OnlineWorkLink';
 import { useSession } from '@/hooks/useSession';
 import { useToast } from '@/components/ui/Toast';
 import { fmtDate, timeAgo } from '@/lib/format';
@@ -181,6 +182,8 @@ export default function ProfilePage() {
                   </Link>
                 </CardContent>
               </Card>
+
+              <OnlineWorkLink />
 
               <LeaderAccessCard role={data.user.role} />
 
