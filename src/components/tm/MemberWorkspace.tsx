@@ -4,9 +4,9 @@ import { useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import Link from 'next/link';
 import {
-  AlertTriangle, Activity, CalendarDays, CheckCircle2, ChevronRight, ClipboardList,
+  AlertTriangle, Activity, CalendarDays, CalendarRange, CheckCircle2, ChevronRight, ClipboardList,
   ExternalLink, Flame, Gauge, ListChecks, MessageSquare, NotebookPen, Plus, Timer,
-  TrendingUp, UserRound, Users as UsersIcon,
+  TrendingUp, UserRound, Users as UsersIcon, X,
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { fetcher } from '@/lib/client';
@@ -16,7 +16,7 @@ import { STATUS_LABEL, type Priority, type TaskStatus } from '@/lib/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Avatar } from '@/components/ui/Avatar';
-import { SearchInput, Select } from '@/components/ui/Field';
+import { Input, SearchInput, Select } from '@/components/ui/Field';
 import { Badge, PriorityBadge, StatusBadge } from '@/components/ui/Badge';
 import { EmptyState, ProgressBar, Skeleton } from '@/components/ui/Misc';
 import { Tabs } from '@/components/ui/Tabs';
@@ -396,12 +396,12 @@ function TaskRow({ task, onOpen }: { task: MemberTask; onOpen: () => void }) {
   );
 }
 
-function DailyTimeline({ detail }: { detail: MemberDetailResponse }) {
+function DailyTimeline({ detail, filtered = false }: { detail: MemberDetailResponse; filtered?: boolean }) {
   const { daily, missing_updates } = detail;
 
   return (
     <div className="space-y-4">
-      {missing_updates.length > 0 && (
+      {!filtered && missing_updates.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-4 py-3">
           <NotebookPen className="h-4 w-4 shrink-0 text-amber-500" />
           <p className="text-sm text-ink">
@@ -469,6 +469,85 @@ function DailyTimeline({ detail }: { detail: MemberDetailResponse }) {
   );
 }
 
+function dateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function DateRangeFilter({
+  from,
+  to,
+  dateField,
+  onFromChange,
+  onToChange,
+  onDateFieldChange,
+  onClear,
+}: {
+  from: string;
+  to: string;
+  dateField: 'deadline' | 'created' | 'completed';
+  onFromChange: (value: string) => void;
+  onToChange: (value: string) => void;
+  onDateFieldChange: (value: 'deadline' | 'created' | 'completed') => void;
+  onClear: () => void;
+}) {
+  const today = new Date();
+  const setPreset = (days: number | 'month') => {
+    const end = dateInputValue(today);
+    const start = new Date(today);
+    if (days === 'month') start.setDate(1);
+    else start.setDate(start.getDate() - days);
+    onFromChange(dateInputValue(start));
+    onToChange(end);
+  };
+  const active = from || to;
+
+  return (
+    <Card className="border-brand/15 bg-brand-soft/20">
+      <CardContent className="space-y-3 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-ink">
+            <CalendarRange className="h-4 w-4 text-brand" />
+            Date range
+          </div>
+          <span className="text-xs text-faint">Filter tasks and Daily Updates together</span>
+          {active && (
+            <button type="button" onClick={onClear} className="focus-ring ml-auto inline-flex items-center gap-1 text-xs font-medium text-brand">
+              <X className="h-3.5 w-3.5" /> Clear
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="min-w-[145px] flex-1 text-xs font-medium text-muted">
+            Task date
+            <Select value={dateField} onChange={(e) => onDateFieldChange(e.target.value as typeof dateField)} className="mt-1 !h-9 text-sm">
+              <option value="deadline">Due date</option>
+              <option value="created">Created date</option>
+              <option value="completed">Completed date</option>
+            </Select>
+          </label>
+          <label className="min-w-[145px] flex-1 text-xs font-medium text-muted">
+            From
+            <Input type="date" value={from} max={to || undefined} onChange={(e) => onFromChange(e.target.value)} className="mt-1 !h-9" />
+          </label>
+          <label className="min-w-[145px] flex-1 text-xs font-medium text-muted">
+            To
+            <Input type="date" value={to} min={from || undefined} onChange={(e) => onToChange(e.target.value)} className="mt-1 !h-9" />
+          </label>
+          <div className="flex flex-wrap gap-1.5 pb-px">
+            <button type="button" onClick={() => setPreset(0)} className="focus-ring rounded-lg border border-line bg-surface px-2.5 py-2 text-xs text-muted hover:text-ink">Today</button>
+            <button type="button" onClick={() => setPreset(6)} className="focus-ring rounded-lg border border-line bg-surface px-2.5 py-2 text-xs text-muted hover:text-ink">7 days</button>
+            <button type="button" onClick={() => setPreset(29)} className="focus-ring rounded-lg border border-line bg-surface px-2.5 py-2 text-xs text-muted hover:text-ink">30 days</button>
+            <button type="button" onClick={() => setPreset('month')} className="focus-ring rounded-lg border border-line bg-surface px-2.5 py-2 text-xs text-muted hover:text-ink">This month</button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 /** Activity rows are machine-written, so they get a readable sentence here. */
 function activitySentence(a: MemberDetailResponse['activity'][number]) {
   switch (a.action) {
@@ -527,6 +606,9 @@ function MemberDetail({
   const [statusFilter, setStatusFilter] = useState<'ALL' | TaskStatus>('ALL');
   const [bucket, setBucket] = useState<'' | 'overdue' | 'today'>('');
   const [taskQuery, setTaskQuery] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [dateField, setDateField] = useState<'deadline' | 'created' | 'completed'>('deadline');
   const [openTaskId, setOpenTaskId] = useState<number | null>(null);
   const [assignOpen, setAssignOpen] = useState(false);
 
@@ -537,12 +619,18 @@ function MemberDetail({
     setStatusFilter('ALL');
     setBucket('');
     setTaskQuery('');
+    setDateFrom('');
+    setDateTo('');
+    setDateField('deadline');
   }, [memberId]);
 
   const params = new URLSearchParams({
     ...(statusFilter !== 'ALL' ? { status: statusFilter } : {}),
     ...(bucket ? { bucket } : {}),
     ...(taskQuery ? { q: taskQuery } : {}),
+    ...(dateFrom ? { from: dateFrom } : {}),
+    ...(dateTo ? { to: dateTo } : {}),
+    ...(dateField !== 'deadline' ? { date_field: dateField } : {}),
   });
 
   const { data, error, isLoading, mutate } = useSWR<MemberDetailResponse>(
@@ -678,6 +766,20 @@ function MemberDetail({
         ]}
         active={tab}
         onChange={setTab}
+      />
+
+      <DateRangeFilter
+        from={dateFrom}
+        to={dateTo}
+        dateField={dateField}
+        onFromChange={setDateFrom}
+        onToChange={setDateTo}
+        onDateFieldChange={setDateField}
+        onClear={() => {
+          setDateFrom('');
+          setDateTo('');
+          setDateField('deadline');
+        }}
       />
 
       {/* Overview -------------------------------------------------- */}
@@ -824,7 +926,9 @@ function MemberDetail({
                   <option key={s} value={s}>{STATUS_LABEL[s]} ({status_counts[s]})</option>
                 ))}
             </Select>
-            <span className="ml-auto text-xs text-faint">{pluralize(tasks.length, 'task')} shown</span>
+            <span className="ml-auto text-xs text-faint">
+              {pluralize(tasks.length, 'task')} shown{dateFrom || dateTo ? ' in range' : ''}
+            </span>
           </div>
 
           {tasks.length === 0 ? (
@@ -848,7 +952,7 @@ function MemberDetail({
         </div>
       )}
 
-      {tab === 'daily' && <DailyTimeline detail={data} />}
+      {tab === 'daily' && <DailyTimeline detail={data} filtered={Boolean(dateFrom || dateTo)} />}
       {tab === 'activity' && (
         <Card>
           <CardContent className="p-5"><ActivityFeed activity={activity} /></CardContent>

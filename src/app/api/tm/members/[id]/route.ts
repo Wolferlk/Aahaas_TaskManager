@@ -92,6 +92,27 @@ export async function GET(req: Request, { params }: Ctx) {
       listParams.push(`%${q}%`, `%${q}%`);
     }
 
+    // Date filters are deliberately explicit: a manager can switch between
+    // due, created and completed dates without changing the meaning of the
+    // existing status/bucket filters. Values come from date inputs, but still
+    // validate them server-side because this endpoint is also public to the UI.
+    const dateFrom = sp.get('from');
+    const dateTo = sp.get('to');
+    const dateField = sp.get('date_field') ?? 'deadline';
+    const dateColumn = dateField === 'created'
+      ? 't.created_at'
+      : dateField === 'completed'
+        ? 't.completed_at'
+        : 't.deadline';
+    if (dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
+      where.push(`DATE(${dateColumn}) >= ?`);
+      listParams.push(dateFrom);
+    }
+    if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+      where.push(`DATE(${dateColumn}) <= ?`);
+      listParams.push(dateTo);
+    }
+
     const limit = intParam(sp, 'limit', 100, 300);
 
     const tasks = await query(
@@ -121,6 +142,16 @@ export async function GET(req: Request, { params }: Ctx) {
     // The summary numbers describe the whole queue, never just the filtered
     // page — otherwise clicking a status tile would rewrite its own count.
     const visibility = me.id === id ? '' : "AND t.is_personal = 0 AND t.visibility <> 'PRIVATE'";
+    const dailyWhere: string[] = ['d.user_id = ?'];
+    const dailyParams: unknown[] = [id];
+    if (dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
+      dailyWhere.push('d.update_date >= ?');
+      dailyParams.push(dateFrom);
+    }
+    if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+      dailyWhere.push('d.update_date <= ?');
+      dailyParams.push(dateTo);
+    }
 
     const [statusRows, priorityRows, projectRows, totals, createdRows, completedRows, daily, activity, missing] =
       await Promise.all([
@@ -193,9 +224,9 @@ export async function GET(req: Request, { params }: Ctx) {
                   (SELECT COUNT(*) FROM tm_daily_update_items i WHERE i.daily_update_id = d.id) AS item_count
              FROM tm_daily_updates d
              LEFT JOIN tm_daily_update_details dd ON dd.daily_update_id = d.id
-            WHERE d.user_id = ?
-            ORDER BY d.update_date DESC LIMIT 14`,
-          [id],
+            WHERE ${dailyWhere.join(' AND ')}
+            ORDER BY d.update_date DESC LIMIT 100`,
+          dailyParams,
         ),
         query(
           `SELECT a.action, a.field, a.old_value, a.new_value, a.created_at,
