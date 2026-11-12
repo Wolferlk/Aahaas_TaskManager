@@ -2,6 +2,7 @@ import 'server-only';
 import { query } from './db';
 import { badRequest } from './api';
 import { taskScope, teamMemberIds } from './tasks';
+import { hideDevAdmin } from './devAdmin';
 import type { SessionUser } from './types';
 
 /**
@@ -99,6 +100,36 @@ export interface DailyUpdateRow {
   hours: number;
   status: string;
   items: number;
+}
+
+/**
+ * One piece of work filed in a Daily Update (typed here or synced from Online
+ * Work). Most of these are never attached to a task, so without them the
+ * report only shows formal tasks and under-reports what people actually did.
+ */
+export interface DailyItemRow {
+  id: number;
+  user_id: number;
+  full_name: string;
+  role: string;
+  team_name: string | null;
+  department_name: string | null;
+  day: string; // YYYY-MM-DD, the filing date
+  update_status: string; // DRAFT | SUBMITTED
+  title: string;
+  topic: string | null;
+  description: string | null;
+  work_type: string | null;
+  status: string | null;
+  priority: string | null;
+  progress: number | null;
+  hours: number | null;
+  outcome: string | null;
+  blockers: string | null;
+  /** Only set when the linked task still exists and the viewer may see it. */
+  task_id: number | null;
+  task_number: string | null;
+  project_name: string | null;
 }
 
 export interface Kpis {
@@ -312,6 +343,101 @@ export async function loadDailyUpdates(
   }));
 }
 
+/**
+ * Every work item filed in a Daily Update during the month, for the same
+ * people `loadDailyUpdates` covers. A project filter matches the item's own
+ * project or, failing that, the project of the task it is attached to.
+ */
+export async function loadDailyItems(
+  user: SessionUser,
+  r: MonthRange,
+  filters: ReportFilters,
+): Promise<DailyItemRow[]> {
+  const where = ['u.deleted_at IS NULL', hideDevAdmin('u')];
+  const params: unknown[] = [];
+
+  if (user.role !== 'MANAGER') {
+    const ids = [...new Set([user.id, ...(await teamMemberIds(user.id))])];
+    where.push('u.id IN (?)');
+    params.push(ids);
+  }
+  if (filters.assignee_id) {
+    where.push('u.id = ?');
+    params.push(filters.assignee_id);
+  }
+  if (filters.team_id) {
+    where.push(`(u.team_id = ? OR EXISTS (SELECT 1 FROM tm_team_members m
+                 WHERE m.user_id = u.id AND m.team_id = ? AND m.is_active = 1))`);
+    params.push(filters.team_id, filters.team_id);
+  }
+  if (filters.project_id) {
+    where.push('COALESCE(i.project_id, lt.project_id) = ?');
+    params.push(filters.project_id);
+  }
+
+  const first = r.key + '-01';
+  const next = r.month === 12 ? `${r.year + 1}-01-01` : `${r.year}-${String(r.month + 1).padStart(2, '0')}-01`;
+
+  // A private task stays private even when a filing points at it: the item is
+  // still listed, just without the link — unless the viewer owns that task.
+  const rows = await query<Record<string, unknown>>(
+    `SELECT i.id, u.id AS user_id, u.full_name, u.role, tm.name AS team_name, dep.name AS department_name,
+            DATE_FORMAT(du.update_date, '%Y-%m-%d') AS day, du.status AS update_status,
+            i.title, i.topic, i.description, i.work_type, i.status, i.priority, i.progress,
+            i.hours, i.outcome, i.blockers,
+            lt.id AS task_id, lt.task_number,
+            COALESCE(p.name, lp.name) AS project_name
+       FROM tm_daily_update_items i
+       JOIN tm_daily_updates du ON du.id = i.daily_update_id
+       JOIN tm_users u ON u.id = du.user_id
+       LEFT JOIN tm_teams tm ON tm.id = u.team_id
+       LEFT JOIN tm_departments dep ON dep.id = u.department_id
+       LEFT JOIN tm_tasks lt ON lt.id = i.task_id AND lt.deleted_at IS NULL
+            AND ((lt.is_personal = 0 AND lt.visibility <> 'PRIVATE') OR lt.assignee_id = ? OR lt.created_by = ?)
+       LEFT JOIN tm_projects p ON p.id = i.project_id
+       LEFT JOIN tm_projects lp ON lp.id = lt.project_id
+      WHERE du.update_date >= ? AND du.update_date < ? AND ${where.join(' AND ')}
+      ORDER BY du.update_date DESC, u.full_name, i.id
+      LIMIT 20000`,
+    [user.id, user.id, first, next, ...params],
+  );
+
+  return rows.map((row) => ({
+    ...(row as unknown as DailyItemRow),
+    id: Number(row.id),
+    user_id: Number(row.user_id),
+    full_name: String(row.full_name),
+    role: String(row.role),
+    day: String(row.day),
+    update_status: String(row.update_status),
+    title: String(row.title),
+    progress: num(row.progress),
+    hours: num(row.hours),
+    task_id: num(row.task_id),
+  }));
+}
+
+/**
+ * Splits filed work the way the My People page does: an item attached to a
+ * task already in the report is folded into that task (its "log"); every other
+ * item stands on its own. So each piece of work is listed exactly once.
+ */
+export function splitDailyItems(tasks: ReportTask[], items: DailyItemRow[]) {
+  const taskIds = new Set(tasks.map((t) => t.id));
+  const logsByTask = new Map<number, DailyItemRow[]>();
+  const standalone: DailyItemRow[] = [];
+  for (const item of items) {
+    if (item.task_id !== null && taskIds.has(item.task_id)) {
+      const list = logsByTask.get(item.task_id) ?? [];
+      list.push(item);
+      logsByTask.set(item.task_id, list);
+    } else {
+      standalone.push(item);
+    }
+  }
+  return { logsByTask, standalone };
+}
+
 /* ------------------------------------------------------------------ *
  * Metrics
  * ------------------------------------------------------------------ */
@@ -500,6 +626,12 @@ export interface MonthlyReport {
   previousKpis: Kpis;
   daily: DailyPoint[];
   dailyUpdates: DailyUpdateRow[] | null;
+  /** Work items filed in Daily Updates (null when daily updates are excluded). */
+  dailyItems: DailyItemRow[] | null;
+  /** Items not attached to a task in `tasks` — listed as their own rows. */
+  standaloneItems: DailyItemRow[];
+  /** Items attached to a task in `tasks`, keyed by task id. */
+  logsByTask: Map<number, DailyItemRow[]>;
 }
 
 export async function buildMonthlyReport(
@@ -510,13 +642,15 @@ export async function buildMonthlyReport(
 ): Promise<MonthlyReport> {
   const previous = previousMonth(range);
 
-  const [all, dailyUpdates, labels] = await Promise.all([
+  const [all, dailyUpdates, dailyItems, labels] = await Promise.all([
     loadTasks(user, previous.start, range.end, filters),
     opts.includeDailyUpdates ? loadDailyUpdates(user, range, filters) : Promise.resolve(null),
+    opts.includeDailyUpdates ? loadDailyItems(user, range, filters) : Promise.resolve(null),
     filterLabels(filters),
   ]);
 
   const tasks = aliveIn(all, range);
+  const { logsByTask, standalone } = splitDailyItems(tasks, dailyItems ?? []);
 
   return {
     range,
@@ -531,6 +665,9 @@ export async function buildMonthlyReport(
     previousKpis: computeKpis(all, previous),
     daily: dailySeries(tasks, range),
     dailyUpdates,
+    dailyItems,
+    standaloneItems: standalone,
+    logsByTask,
   };
 }
 

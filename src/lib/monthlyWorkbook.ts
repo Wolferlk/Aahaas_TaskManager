@@ -13,6 +13,7 @@ import {
   onTimeFlag,
   round1,
   toLocal,
+  type DailyItemRow,
   type DailyUpdateRow,
   type GroupStats,
   type Kpis,
@@ -77,6 +78,12 @@ const PRIORITY: Record<string, Pair> = {
   HIGH: ['FFFFEDD5', 'FFC2410C'],
   MEDIUM: ['FFFEF3C7', 'FFB45309'],
   LOW: ['FFE0F2FE', 'FF0369A1'],
+};
+
+/** Where a row came from — the same blue / violet the My People page uses. */
+const SOURCE: Record<'task' | 'daily', Pair> = {
+  task: ['FFE0F2FE', 'FF0369A1'],
+  daily: ['FFEDE9FE', 'FF6D28D9'],
 };
 
 const HEALTH: Record<string, Pair> = {
@@ -256,6 +263,12 @@ const taskLink = (t: ReportTask) => `${LINK_BASE}/tm/tasks/team?task=${t.id}`;
 
 function shortDate(d: Date) {
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
+/** A filing date ("2026-11-11") as a UTC-field Date, like every other date in the workbook. */
+function dayDate(day: string): Date {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
 }
 
 /* ------------------------------------------------------------------ *
@@ -544,7 +557,11 @@ interface Col {
   numFmt?: string;
   align?: 'left' | 'center' | 'right';
   value: (t: ReportTask) => ExcelJS.CellValue;
+  /** The same column for a Daily Update entry; omitted means the cell stays empty. */
+  daily?: (d: DailyItemRow) => ExcelJS.CellValue;
 }
+
+type RegisterRow = { kind: 'task'; t: ReportTask } | { kind: 'daily'; d: DailyItemRow };
 
 function tasksSheet(wb: ExcelJS.Workbook, report: MonthlyReport) {
   const { range } = report;
@@ -552,6 +569,12 @@ function tasksSheet(wb: ExcelJS.Workbook, report: MonthlyReport) {
   const now = new Date();
   const cutoff = range.end < now ? range.end : now;
   const local = (d: Date | null) => (d ? toLocal(d, range.tz) : null);
+  const withDaily = report.dailyItems !== null;
+  const logsOf = (t: ReportTask) => report.logsByTask.get(t.id) ?? [];
+  const text = (s: string | null) => {
+    const v = (s ?? '').replace(/\s+/g, ' ').trim();
+    return v ? clip(v, 600) : null;
+  };
 
   const daysLate = (t: ReportTask): number | null => {
     if (!t.deadline) return null;
@@ -562,19 +585,30 @@ function tasksSheet(wb: ExcelJS.Workbook, report: MonthlyReport) {
   };
 
   const cols: Col[] = [
-    { header: 'Task ID', width: 17, value: (t) => ({ text: t.task_number, hyperlink: taskLink(t), tooltip: 'Open in Aahaas' }) },
-    { header: 'Task', width: 48, value: (t) => t.title },
-    { header: 'This month', width: 21, value: (t) => monthActivity(t, range) },
-    { header: 'Status', width: 13, align: 'center', value: (t) => humanise(t.status) },
-    { header: 'Priority', width: 11, align: 'center', value: (t) => humanise(t.priority) },
-    { header: 'Type', width: 11, align: 'center', value: (t) => humanise(t.task_type) },
-    { header: 'Progress', width: 10, align: 'center', numFmt: '0"%"', value: (t) => t.progress },
-    { header: 'Assignee', width: 21, value: (t) => t.assignee_name ?? 'Unassigned' },
+    // Present even without daily updates, so the column layout never shifts between exports.
+    { header: 'Source', width: 14, align: 'center', value: () => 'Task', daily: () => 'Daily Update' },
+    {
+      header: 'Task ID', width: 17,
+      value: (t) => ({ text: t.task_number, hyperlink: taskLink(t), tooltip: 'Open in Aahaas' }),
+      daily: (d) => (d.task_id && d.task_number
+        ? { text: d.task_number, hyperlink: `${LINK_BASE}/tm/tasks/team?task=${d.task_id}`, tooltip: 'Open the linked task in Aahaas' }
+        : null),
+    },
+    { header: 'Task', width: 48, value: (t) => t.title, daily: (d) => d.title },
+    {
+      header: 'This month', width: 21, value: (t) => monthActivity(t, range),
+      daily: (d) => `Filed ${shortDate(dayDate(d.day))}${d.update_status === 'DRAFT' ? ' · draft' : ''}`,
+    },
+    { header: 'Status', width: 13, align: 'center', value: (t) => humanise(t.status), daily: (d) => humanise(d.status) },
+    { header: 'Priority', width: 11, align: 'center', value: (t) => humanise(t.priority), daily: (d) => humanise(d.priority) },
+    { header: 'Type', width: 11, align: 'center', value: (t) => humanise(t.task_type), daily: (d) => d.work_type ?? d.topic },
+    { header: 'Progress', width: 10, align: 'center', numFmt: '0"%"', value: (t) => t.progress, daily: (d) => d.progress },
+    { header: 'Assignee', width: 21, value: (t) => t.assignee_name ?? 'Unassigned', daily: (d) => d.full_name },
     { header: 'Collaborators', width: 22, value: (t) => t.collaborators },
-    { header: 'Created by', width: 19, value: (t) => t.creator_name },
-    { header: 'Project', width: 20, value: (t) => t.project_name },
-    { header: 'Team', width: 16, value: (t) => t.team_name },
-    { header: 'Department', width: 14, value: (t) => t.department_name },
+    { header: 'Created by', width: 19, value: (t) => t.creator_name, daily: (d) => d.full_name },
+    { header: 'Project', width: 20, value: (t) => t.project_name, daily: (d) => d.project_name },
+    { header: 'Team', width: 16, value: (t) => t.team_name, daily: (d) => d.team_name },
+    { header: 'Department', width: 14, value: (t) => t.department_name, daily: (d) => d.department_name },
     { header: 'Created', width: 16, align: 'center', numFmt: 'd mmm yyyy h:mm', value: (t) => local(t.created_at) },
     { header: 'Start', width: 12, align: 'center', numFmt: 'd mmm yyyy', value: (t) => local(t.start_date) },
     { header: 'Deadline', width: 16, align: 'center', numFmt: 'd mmm yyyy h:mm', value: (t) => local(t.deadline) },
@@ -584,7 +618,12 @@ function tasksSheet(wb: ExcelJS.Workbook, report: MonthlyReport) {
         ? Math.round((t.deadline.getTime() - t.original_deadline.getTime()) / 86_400_000) || null
         : null),
     },
-    { header: 'Completed', width: 16, align: 'center', numFmt: 'd mmm yyyy h:mm', value: (t) => (t.status === 'COMPLETED' ? local(t.completed_at) : null) },
+    {
+      header: 'Completed', width: 16, align: 'center', numFmt: 'd mmm yyyy h:mm',
+      value: (t) => (t.status === 'COMPLETED' ? local(t.completed_at) : null),
+      // A filed entry has no completion time of its own — the day it was filed is when it was reported done.
+      daily: (d) => (d.status === 'COMPLETED' ? dayDate(d.day) : null),
+    },
     { header: 'Cycle time (days)', width: 10, align: 'center', numFmt: '0.0', value: (t) => (t.status === 'COMPLETED' ? round1(cycleDays(t) ?? 0) : null) },
     {
       header: 'On time', width: 10, align: 'center',
@@ -592,66 +631,108 @@ function tasksSheet(wb: ExcelJS.Workbook, report: MonthlyReport) {
     },
     { header: 'Days late', width: 9, align: 'center', value: daysLate },
     { header: 'Est. hours', width: 9, align: 'center', numFmt: '0.0', value: (t) => t.estimated_hours },
-    { header: 'Actual hours', width: 9, align: 'center', numFmt: '0.0', value: (t) => t.actual_hours },
+    { header: 'Actual hours', width: 9, align: 'center', numFmt: '0.0', value: (t) => t.actual_hours, daily: (d) => d.hours },
     {
       header: 'Variance (h)', width: 10, align: 'center', numFmt: '+0.0;-0.0;0.0',
       value: (t) => (t.estimated_hours !== null && t.actual_hours !== null ? round1(t.actual_hours - t.estimated_hours) : null),
     },
+    ...(withDaily
+      ? [{
+        header: 'Logged in Daily Updates', width: 18, align: 'center' as const,
+        value: (t: ReportTask) => {
+          const logs = logsOf(t);
+          if (!logs.length) return null;
+          const h = round1(logs.reduce((s, l) => s + (l.hours ?? 0), 0));
+          return `${logs.length} ${logs.length === 1 ? 'entry' : 'entries'}${h ? ` · ${h} h` : ''}`;
+        },
+      }]
+      : []),
     { header: 'Subtasks', width: 9, align: 'center', value: (t) => (t.subtask_count ? `${t.subtask_done}/${t.subtask_count}` : null) },
     { header: 'Checklist', width: 9, align: 'center', value: (t) => (t.checklist_count ? `${t.checklist_done}/${t.checklist_count}` : null) },
     { header: 'Comments', width: 9, align: 'center', value: (t) => t.comment_count || null },
     { header: 'Reopened', width: 9, align: 'center', value: (t) => t.reopen_count || null },
     { header: 'Tags', width: 18, value: (t) => t.tags },
     { header: 'Parent task', width: 15, value: (t) => t.parent_number },
-    { header: 'Blocked reason', width: 30, value: (t) => t.blocked_reason },
-    { header: 'Completion notes', width: 32, value: (t) => t.completion_notes },
+    { header: 'Blocked reason', width: 30, value: (t) => t.blocked_reason, daily: (d) => text(d.blockers) },
+    { header: 'Completion notes', width: 32, value: (t) => t.completion_notes, daily: (d) => text(d.outcome) },
     {
       header: 'Description', width: 60,
       value: (t) => {
         const text = (t.description ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
         return text ? (text.length > 600 ? text.slice(0, 597) + '…' : text) : null;
       },
+      daily: (d) => text(d.description),
     },
   ];
 
   ws.columns = [{ width: 2.5 }, ...cols.map((c) => ({ width: c.width }))];
   const LAST = cols.length + 1;
-  banner(ws, report, 'All Tasks', `${report.tasks.length} tasks alive during ${range.label} — filter, sort and click any Task ID to open it.`, LAST);
+  const entries = report.standaloneItems;
+  banner(
+    ws, report, 'All Tasks',
+    withDaily
+      ? `${report.tasks.length} tasks alive during ${range.label} + ${entries.length} Daily Update ${entries.length === 1 ? 'entry' : 'entries'} not tied to one of them — filter by Source to split them.`
+      : `${report.tasks.length} tasks alive during ${range.label} — filter, sort and click any Task ID to open it.`,
+    LAST,
+  );
 
   const HEADER = 6;
   ws.getRow(5).height = 8;
   tableHeader(ws, HEADER, 2, cols.map((c) => c.header));
-  ws.views = [{ state: 'frozen', xSplit: 3, ySplit: HEADER, topLeftCell: 'D7', showGridLines: false }];
+  // Source, Task ID and Task stay in view while scrolling right.
+  ws.views = [{ state: 'frozen', xSplit: 4, ySplit: HEADER, topLeftCell: 'E7', showGridLines: false }];
 
-  const statusCol = 2 + cols.findIndex((c) => c.header === 'Status');
-  const priorityCol = 2 + cols.findIndex((c) => c.header === 'Priority');
-  const onTimeCol = 2 + cols.findIndex((c) => c.header === 'On time');
-  const lateCol = 2 + cols.findIndex((c) => c.header === 'Days late');
-  const varianceCol = 2 + cols.findIndex((c) => c.header === 'Variance (h)');
-  const progressCol = 2 + cols.findIndex((c) => c.header === 'Progress');
+  const colOf = (header: string) => 2 + cols.findIndex((c) => c.header === header);
+  const sourceCol = colOf('Source');
+  const idCol = colOf('Task ID');
+  const titleCol = colOf('Task');
+  const statusCol = colOf('Status');
+  const priorityCol = colOf('Priority');
+  const onTimeCol = colOf('On time');
+  const lateCol = colOf('Days late');
+  const varianceCol = colOf('Variance (h)');
+  const progressCol = colOf('Progress');
 
-  const sorted = [...report.tasks].sort(
+  const sortedTasks = [...report.tasks].sort(
     (a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status)
       || PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority)
       || (a.deadline?.getTime() ?? Infinity) - (b.deadline?.getTime() ?? Infinity),
   );
+  // Tasks first, then filed work newest day first (already ordered by the loader).
+  const sorted: RegisterRow[] = [
+    ...sortedTasks.map((t) => ({ kind: 'task' as const, t })),
+    ...entries.map((d) => ({ kind: 'daily' as const, d })),
+  ];
 
-  sorted.forEach((t, i) => {
+  sorted.forEach((item, i) => {
     const r = HEADER + 1 + i;
     const row = ws.getRow(r);
     row.height = 20;
+    const isDaily = item.kind === 'daily';
     cols.forEach((col, j) => {
       const cell = row.getCell(2 + j);
-      const v = col.value(t);
+      const v = item.kind === 'task' ? col.value(item.t) : col.daily?.(item.d);
       cell.value = v === undefined || v === '' ? null : v;
       bodyCell(cell, i % 2 === 1);
+      // A faint violet wash marks filed work across the whole row, not just the Source cell.
+      if (isDaily) cell.fill = fill(i % 2 === 1 ? 'FFF5F0FF' : 'FFFAF7FF');
       if (col.numFmt) cell.numFmt = col.numFmt;
       cell.alignment = { vertical: 'middle', horizontal: col.align ?? 'left' };
     });
 
-    const id = row.getCell(2);
-    id.font = font(10, C.info, { underline: true, bold: true });
-    row.getCell(3).font = font(10, C.ink, { bold: true });
+    pill(row.getCell(sourceCol), isDaily ? '📝 Daily Update' : '▣ Task', isDaily ? SOURCE.daily : SOURCE.task);
+    const id = row.getCell(idCol);
+    if (id.value) id.font = font(10, C.info, { underline: true, bold: true });
+    row.getCell(titleCol).font = font(10, C.ink, { bold: true });
+
+    if (item.kind === 'daily') {
+      const { d } = item;
+      if (d.status) pill(row.getCell(statusCol), humanise(d.status), STATUS[d.status]);
+      if (d.priority) pill(row.getCell(priorityCol), humanise(d.priority), PRIORITY[d.priority]);
+      return;
+    }
+
+    const { t } = item;
     pill(row.getCell(statusCol), humanise(t.status), STATUS[t.status]);
     pill(row.getCell(priorityCol), humanise(t.priority), PRIORITY[t.priority]);
 
@@ -671,7 +752,9 @@ function tasksSheet(wb: ExcelJS.Workbook, report: MonthlyReport) {
   const lastRow = HEADER + Math.max(1, sorted.length);
   if (!sorted.length) {
     const cell = merge(ws, HEADER + 1, 2, HEADER + 1, 8);
-    cell.value = 'No tasks were alive in this month for the filters you chose.';
+    cell.value = withDaily
+      ? 'No tasks were alive and no Daily Update work was filed in this month for the filters you chose.'
+      : 'No tasks were alive in this month for the filters you chose.';
     cell.font = font(10, C.muted, { italic: true });
   } else {
     ws.autoFilter = { from: { row: HEADER, column: 2 }, to: { row: lastRow, column: LAST } };
@@ -1064,7 +1147,13 @@ function guideSheet(wb: ExcelJS.Workbook, report: MonthlyReport) {
     ['Overdue at month end', 'Open when the month ended (or right now, for the current month) and already past their deadline.'],
     ['Avg cycle time', 'Average time from start date (or creation, if no start date) to completion, over tasks completed this month. Tasks logged as already done (under 10 minutes) are left out.'],
     ['Carried forward', 'Tasks still open when the month ended. They will appear again in next month’s report.'],
-    ['This month (All Tasks)', 'What happened to the task inside the month: Created & completed, Carried in · completed, Created · still open, Carried over, or closed without completing.'],
+    ['This month (All Tasks)', 'What happened to the task inside the month: Created & completed, Carried in · completed, Created · still open, Carried over, or closed without completing. For a Daily Update entry it is the day it was filed.'],
+    ...(report.dailyItems !== null
+      ? [
+        ['Source', 'Every row in All Tasks is labelled ▣ Task (blue) or 📝 Daily Update (violet, with a tinted row). Use the Source filter to see one kind at a time.'] as [string, string],
+        ['Daily Update entries', 'Work people filed in their Daily Updates (typed in the app or synced from Online Work) during the month. An entry attached to a task in this report is not listed again — it is counted in that task’s “Logged in Daily Updates” column. Every other entry gets its own row, and its Completed date is the day it was filed. Entries are not counted in the task KPIs.'] as [string, string],
+      ]
+      : []),
     ['Status', 'Statuses are as of today, so a task completed last week shows Completed even in an earlier month’s report.'],
     ['Deadline moved', 'Days between the original deadline and the current one. Positive = pushed later.'],
     ['Variance (h)', 'Actual hours − estimated hours. Red when over the estimate, green when under.'],
@@ -1267,13 +1356,91 @@ function personTasks(
   return row + 1;
 }
 
+/**
+ * The person tab's list of work filed in Daily Updates that is not one of the
+ * tasks above it. Each row leads with a violet "📝 date" pill so it never reads
+ * as a task. Returns the next free row.
+ */
+function personDailyItems(ws: ExcelJS.Worksheet, row: number, items: DailyItemRow[]): number {
+  if (!items.length) return row;
+  const hours = round1(items.reduce((s, d) => s + (d.hours ?? 0), 0));
+  sectionTitle(
+    ws, row, 2, 13,
+    `📝 From Daily Updates (${items.length})`,
+    `work filed in a Daily Update that isn’t one of the tasks above · ${hours} h · newest first`,
+  );
+  row++;
+
+  tableHeader(ws, row, 2, ['Filed', 'Work', '', '', 'Status', 'Priority', 'Project', 'Hours', 'Progress', 'Linked task', 'Outcome / notes', '']);
+  merge(ws, row, 3, row, 5).alignment = { vertical: 'middle', horizontal: 'left' };
+  merge(ws, row, 12, row, 13).alignment = { vertical: 'middle', horizontal: 'left' };
+  row++;
+
+  items.forEach((d, i) => {
+    const r = ws.getRow(row);
+    r.height = 20;
+    for (let c = 2; c <= 13; c++) {
+      bodyCell(r.getCell(c), i % 2 === 1);
+      r.getCell(c).fill = fill(i % 2 === 1 ? 'FFF5F0FF' : 'FFFAF7FF');
+      r.getCell(c).alignment = { vertical: 'middle', horizontal: c <= 5 || c === 8 || c >= 12 ? 'left' : 'center' };
+    }
+
+    const date = dayDate(d.day);
+    pill(
+      r.getCell(2),
+      `📝 ${date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}`,
+      SOURCE.daily,
+    );
+
+    const title = merge(ws, row, 3, row, 5);
+    title.value = clip(d.title, 60) + (d.update_status === 'DRAFT' ? '  (draft)' : '');
+    title.font = font(10, C.ink, { bold: true });
+    title.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+
+    if (d.status) pill(r.getCell(6), humanise(d.status), STATUS[d.status]);
+    if (d.priority) pill(r.getCell(7), humanise(d.priority), PRIORITY[d.priority]);
+
+    const project = r.getCell(8);
+    project.value = clip(d.project_name ?? '—', 20);
+    project.font = font(9, C.muted);
+
+    if (d.hours) {
+      r.getCell(9).value = d.hours;
+      r.getCell(9).numFmt = '0.0#';
+    }
+    if (d.progress !== null) {
+      const progress = r.getCell(10);
+      progress.value = d.progress;
+      progress.numFmt = '0"%"';
+      progress.font = font(10, d.progress >= 100 ? C.good : d.progress >= 50 ? C.info : C.body, { bold: d.progress >= 100 });
+    }
+
+    if (d.task_id && d.task_number) {
+      const link = r.getCell(11);
+      link.value = { text: d.task_number, hyperlink: `${LINK_BASE}/tm/tasks/team?task=${d.task_id}`, tooltip: 'Open the linked task in Aahaas' };
+      link.font = font(9, C.info, { underline: true, bold: true });
+    }
+
+    const notes = merge(ws, row, 12, row, 13);
+    const note = (d.outcome || d.description || '').replace(/\s+/g, ' ').trim();
+    notes.value = note ? clip(note, 70) : null;
+    notes.font = font(9, C.muted);
+    notes.alignment = { vertical: 'middle', horizontal: 'left' };
+    row++;
+  });
+  return row + 1;
+}
+
 function personHighlights(
   person: Person,
   report: MonthlyReport,
-  data: { assigned: ReportTask[]; k: Kpis; pk: Kpis; collab: ReportTask[]; delegated: ReportTask[]; updates: DailyUpdateRow[] },
+  data: {
+    assigned: ReportTask[]; k: Kpis; pk: Kpis; collab: ReportTask[]; delegated: ReportTask[];
+    updates: DailyUpdateRow[]; items: DailyItemRow[]; standalone: DailyItemRow[];
+  },
 ): Array<{ icon: string; title: string; text: string }> {
   const { range, previous } = report;
-  const { assigned, k, pk, collab, delegated, updates } = data;
+  const { assigned, k, pk, collab, delegated, updates, items, standalone } = data;
   const first = person.name.split(' ')[0];
   const out: Array<{ icon: string; title: string; text: string }> = [];
 
@@ -1330,9 +1497,13 @@ function personHighlights(
     if (updates.length) {
       const hours = round1(updates.reduce((s, u) => s + u.hours, 0));
       const drafts = updates.filter((u) => u.status !== 'SUBMITTED').length;
+      const done = items.filter((d) => d.status === 'COMPLETED').length;
+      const work = items.length
+        ? ` · ${items.length} work ${items.length === 1 ? 'entry' : 'entries'} (${done} completed, ${standalone.length} not tied to a task)`
+        : '';
       out.push({
         icon: '📝', title: 'Daily updates',
-        text: `${updates.length} filed, ${hours} h logged (${round1(hours / updates.length)} h a day)${drafts ? ` · ${drafts} still draft` : ''}.`,
+        text: `${updates.length} filed, ${hours} h logged (${round1(hours / updates.length)} h a day)${work}${drafts ? ` · ${drafts} still draft` : ''}.`,
       });
     } else {
       out.push({ icon: '📝', title: 'Daily updates', text: `${first} didn’t file any daily updates in ${range.label}.` });
@@ -1354,6 +1525,8 @@ function personSheet(wb: ExcelJS.Workbook, report: MonthlyReport, person: Person
   );
   const delegated = report.tasks.filter((t) => t.created_by === person.id && t.assignee_id !== person.id);
   const updates = (report.dailyUpdates ?? []).filter((d) => d.user_id === person.id);
+  const items = (report.dailyItems ?? []).filter((d) => d.user_id === person.id);
+  const standalone = report.standaloneItems.filter((d) => d.user_id === person.id);
   const accent = leader ? C.violet : 'FF0EA5E9';
 
   const ws = wb.addWorksheet(person.sheet, {
@@ -1362,12 +1535,13 @@ function personSheet(wb: ExcelJS.Workbook, report: MonthlyReport, person: Person
   });
   const LAST = 14;
   ws.columns = [{ width: 2.5 }, { width: 19 }, ...Array.from({ length: 11 }, () => ({ width: 12.5 })), { width: 2.5 }];
-  paintCanvas(ws, 110 + assigned.length + collab.length + delegated.length, LAST);
+  paintCanvas(ws, 110 + assigned.length + collab.length + delegated.length + standalone.length, LAST);
 
   const rankIdx = ranking.findIndex((g) => g.key === String(person.id));
   banner(
     ws, report, person.name,
-    `${humanise(person.role)}${person.team ? `  ·  ${person.team}` : ''}  ·  ${assigned.length} task${assigned.length === 1 ? '' : 's'} in ${range.label}`,
+    `${humanise(person.role)}${person.team ? `  ·  ${person.team}` : ''}  ·  ${assigned.length} task${assigned.length === 1 ? '' : 's'}`
+      + `${standalone.length ? ` + ${standalone.length} Daily Update ${standalone.length === 1 ? 'entry' : 'entries'}` : ''} in ${range.label}`,
     LAST,
   );
 
@@ -1525,7 +1699,7 @@ function personSheet(wb: ExcelJS.Workbook, report: MonthlyReport, person: Person
   // Highlights
   sectionTitle(ws, row, 2, 13, 'Highlights', `what stood out for ${person.name.split(' ')[0]}`);
   row++;
-  for (const line of personHighlights(person, report, { assigned, k, pk, collab, delegated, updates })) {
+  for (const line of personHighlights(person, report, { assigned, k, pk, collab, delegated, updates, items, standalone })) {
     for (let c = 2; c <= 13; c++) ws.getCell(row, c).fill = fill(C.card);
     const cell = merge(ws, row, 2, row, 13);
     cell.value = { richText: [
@@ -1556,6 +1730,8 @@ function personSheet(wb: ExcelJS.Workbook, report: MonthlyReport, person: Person
     title: `✓ Completed this month (${completed.length})`, hint: 'newest first', tasks: completed, third: 'Project',
     empty: 'Nothing completed this month yet.',
   });
+  // Filed work sits right under completed tasks: together they are what this person delivered.
+  row = personDailyItems(ws, row, standalone);
   row = personTasks(ws, report, row, {
     title: `○ Still open at month end (${open.length})`, hint: 'overdue first, then by priority', tasks: open, third: 'Project',
     empty: 'Nothing left open — a clean slate. 🎉',

@@ -50,6 +50,7 @@ export async function GET(req: Request) {
         by_status: Object.fromEntries(countBy(tasks, (t) => t.status)),
         sheets: {
           tasks: tasks.length,
+          daily_entries: report.dailyItems ? report.standaloneItems.length : null,
           people: new Set(tasks.map((t) => t.assignee_id ?? 0)).size,
           projects: new Set(tasks.map((t) => t.project_id ?? 0)).size,
           teams: new Set(tasks.map((t) => t.team_id ?? 0)).size,

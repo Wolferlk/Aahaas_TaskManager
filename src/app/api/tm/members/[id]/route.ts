@@ -73,16 +73,17 @@ export async function GET(req: Request, { params }: Ctx) {
     if (me.id !== id) where.push("t.is_personal = 0 AND t.visibility <> 'PRIVATE'");
 
     const statusFilter = sp.get('status');
-    if (statusFilter && statusFilter !== 'ALL') {
-      const list = statusFilter.split(',').filter((s): s is TaskStatus => (TASK_STATUSES as string[]).includes(s));
-      if (list.length) {
-        where.push('t.status IN (?)');
-        listParams.push(list);
-      }
+    const statusList = statusFilter && statusFilter !== 'ALL'
+      ? statusFilter.split(',').filter((s): s is TaskStatus => (TASK_STATUSES as string[]).includes(s))
+      : [];
+    if (statusList.length) {
+      where.push('t.status IN (?)');
+      listParams.push(statusList);
     }
-    if (sp.get('bucket') === 'overdue') {
+    const bucket = sp.get('bucket');
+    if (bucket === 'overdue') {
       where.push("t.deadline IS NOT NULL AND t.deadline < NOW() AND t.status NOT IN ('COMPLETED','CANCELLED','REJECTED')");
-    } else if (sp.get('bucket') === 'today') {
+    } else if (bucket === 'today') {
       where.push("DATE(t.deadline) = CURDATE() AND t.status NOT IN ('COMPLETED','CANCELLED','REJECTED')");
     }
 
@@ -153,7 +154,59 @@ export async function GET(req: Request, { params }: Ctx) {
       dailyParams.push(dateTo);
     }
 
-    const [statusRows, priorityRows, projectRows, totals, createdRows, completedRows, daily, activity, missing] =
+    /* ---------------- daily filing work items ---------------- */
+
+    // Most of what people do in a day is filed as Daily Update items that are
+    // never attached to a task (Online Work filings especially). Without these
+    // the Tasks tab only shows formal tasks and under-reports the day.
+    //
+    // They follow the same filters as the task list, except: the date range
+    // always means the filing date (an item has no deadline or created date
+    // of its own), and the overdue / due-today buckets exclude them because
+    // those are deadline concepts.
+    const itemWhere: string[] = ['d.user_id = ?'];
+    const itemParams: unknown[] = [id];
+    if (dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
+      itemWhere.push('d.update_date >= ?');
+      itemParams.push(dateFrom);
+    }
+    if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+      itemWhere.push('d.update_date <= ?');
+      itemParams.push(dateTo);
+    }
+    if (statusList.length) {
+      itemWhere.push('i.status IN (?)');
+      itemParams.push(statusList);
+    }
+    if (q) {
+      itemWhere.push('(i.title LIKE ? OR i.topic LIKE ? OR i.description LIKE ? OR lt.task_number LIKE ?)');
+      itemParams.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    }
+    // A private task stays private even when it is referenced from a filing:
+    // the item still shows, but without the link to the task behind it.
+    const linkedTaskVisibility = me.id === id ? '' : "AND lt.is_personal = 0 AND lt.visibility <> 'PRIVATE'";
+
+    const dailyItemsPromise = bucket === 'overdue' || bucket === 'today'
+      ? Promise.resolve([])
+      : query(
+          `SELECT i.id, i.daily_update_id, DATE_FORMAT(d.update_date, '%Y-%m-%d') AS update_date,
+                  d.status AS update_status,
+                  i.title, i.topic, i.description, i.work_type, i.status, i.priority, i.progress,
+                  i.hours, i.outcome, i.blockers, i.linked_action,
+                  lt.id AS task_id, lt.task_number, lt.title AS task_title,
+                  COALESCE(p.name, lp.name) AS project_name, COALESCE(p.color, lp.color) AS project_color
+             FROM tm_daily_update_items i
+             JOIN tm_daily_updates d ON d.id = i.daily_update_id
+             LEFT JOIN tm_tasks lt ON lt.id = i.task_id AND lt.deleted_at IS NULL ${linkedTaskVisibility}
+             LEFT JOIN tm_projects p ON p.id = i.project_id
+             LEFT JOIN tm_projects lp ON lp.id = lt.project_id
+            WHERE ${itemWhere.join(' AND ')}
+            ORDER BY d.update_date DESC, i.id ASC
+            LIMIT 300`,
+          itemParams,
+        );
+
+    const [statusRows, priorityRows, projectRows, totals, createdRows, completedRows, daily, activity, missing, dailyItems] =
       await Promise.all([
         query<{ status: TaskStatus; c: number }>(
           `SELECT t.status, COUNT(*) AS c FROM tm_tasks t
@@ -238,6 +291,7 @@ export async function GET(req: Request, { params }: Ctx) {
           [id],
         ),
         missingUpdateDays(id, TREND_DAYS),
+        dailyItemsPromise,
       ]);
 
     const status_counts = Object.fromEntries(TASK_STATUSES.map((s) => [s, 0])) as Record<TaskStatus, number>;
@@ -280,6 +334,7 @@ export async function GET(req: Request, { params }: Ctx) {
       priority_counts,
       projects: projectRows,
       tasks,
+      daily_items: dailyItems,
       trend,
       daily,
       missing_updates: missing,
