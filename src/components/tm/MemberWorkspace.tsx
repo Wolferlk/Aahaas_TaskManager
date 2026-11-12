@@ -12,7 +12,7 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianG
 import { fetcher } from '@/lib/client';
 import { cn } from '@/lib/cn';
 import { fmtDate, fmtDateTime, fmtDueIn, pluralize, timeAgo } from '@/lib/format';
-import { STATUS_LABEL, type Priority, type TaskStatus } from '@/lib/types';
+import { PRIORITIES, STATUS_LABEL, TASK_STATUSES, type Priority, type TaskStatus } from '@/lib/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Avatar } from '@/components/ui/Avatar';
@@ -75,6 +75,46 @@ interface MemberTask {
   is_overdue: 0 | 1;
 }
 
+/** One line of work filed in a Daily Update (typed here or synced from Online Work). */
+interface DailyWorkItem {
+  id: number;
+  daily_update_id: number;
+  update_date: string;
+  update_status: 'DRAFT' | 'SUBMITTED';
+  title: string;
+  topic: string | null;
+  description: string | null;
+  work_type: string | null;
+  status: string | null;
+  priority: string | null;
+  progress: number | null;
+  hours: string | number | null;
+  outcome: string | null;
+  blockers: string | null;
+  linked_action: 'NONE' | 'ATTACHED' | 'CREATED';
+  /** Only set when the linked task still exists and the reader may see it. */
+  task_id: number | null;
+  task_number: string | null;
+  task_title: string | null;
+  project_name: string | null;
+  project_color: string | null;
+}
+
+type TaskSource = 'all' | 'tasks' | 'daily';
+
+/** The statuses a Daily Update item can carry, so they stay filterable even with no matching task. */
+const DAILY_ITEM_STATUSES: TaskStatus[] = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'COMPLETED'];
+
+const asTaskStatus = (s: string | null): TaskStatus | null =>
+  s && (TASK_STATUSES as string[]).includes(s) ? (s as TaskStatus) : null;
+
+const asPriority = (p: string | null): Priority | null =>
+  p && (PRIORITIES as string[]).includes(p) ? (p as Priority) : null;
+
+const hoursOf = (items: DailyWorkItem[]) => items.reduce((sum, i) => sum + Number(i.hours ?? 0), 0);
+
+const fmtHours = (h: number) => `${Math.round(h * 100) / 100}h`;
+
 interface MemberDetailResponse {
   user: {
     id: number;
@@ -106,6 +146,8 @@ interface MemberDetailResponse {
   priority_counts: Record<string, number>;
   projects: Array<{ project_name: string; project_color: string | null; total: number; completed: number; open_count: number }>;
   tasks: MemberTask[];
+  /** Work filed in Daily Updates, filtered by the same range / search / status. */
+  daily_items?: DailyWorkItem[];
   trend: Array<{ date: string; created: number; completed: number }>;
   daily: Array<{
     id: number;
@@ -322,8 +364,43 @@ function RosterRow({ member, selected, onSelect }: { member: MemberRow; selected
  * Detail tabs
  * ------------------------------------------------------------------ */
 
-function TaskRow({ task, onOpen }: { task: MemberTask; onOpen: () => void }) {
+/**
+ * Where a card in the Tasks tab came from. Both kinds sit in one list under
+ * "All work", so each card says what it is in the same spot and colour.
+ */
+function SourceChip({ kind }: { kind: 'task' | 'daily' }) {
+  const isTask = kind === 'task';
+  const Icon = isTask ? ClipboardList : NotebookPen;
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset',
+        isTask
+          ? 'bg-sky-500/10 text-sky-700 ring-sky-500/25 dark:text-sky-300'
+          : 'bg-violet-500/10 text-violet-700 ring-violet-500/25 dark:text-violet-300',
+      )}
+    >
+      <Icon className="h-3 w-3" aria-hidden />
+      {isTask ? 'Task' : 'Daily Update'}
+    </span>
+  );
+}
+
+function TaskRow({
+  task,
+  onOpen,
+  logs = [],
+  showSource = false,
+}: {
+  task: MemberTask;
+  onOpen: () => void;
+  /** Daily Update entries filed against this task (newest first), shown inline instead of as separate rows. */
+  logs?: DailyWorkItem[];
+  /** Label the card as a Task — used where tasks and Daily Update entries share one list. */
+  showSource?: boolean;
+}) {
   const due = fmtDueIn(task.deadline);
+  const loggedHours = hoursOf(logs);
 
   return (
     <button
@@ -337,6 +414,7 @@ function TaskRow({ task, onOpen }: { task: MemberTask; onOpen: () => void }) {
       />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
+          {showSource && <SourceChip kind="task" />}
           <span className="font-mono text-[11px] text-faint">{task.task_number}</span>
           <p className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{task.title}</p>
         </div>
@@ -387,12 +465,115 @@ function TaskRow({ task, onOpen }: { task: MemberTask; onOpen: () => void }) {
           </p>
         )}
 
+        {logs.length > 0 && (
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-brand">
+            <NotebookPen className="h-3 w-3 shrink-0" />
+            <span>
+              Logged in Daily Update {fmtDate(logs[0].update_date, { month: 'short', day: 'numeric' })}
+              {logs.length > 1 && ` (+${logs.length - 1} more ${logs.length - 1 === 1 ? 'day' : 'days'})`}
+            </span>
+            {loggedHours > 0 && <span className="text-faint">· {fmtHours(loggedHours)}</span>}
+          </p>
+        )}
+
         <div className="mt-2 flex items-center gap-2">
           <ProgressBar value={task.progress} className="flex-1" />
           <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-faint">{task.progress}%</span>
         </div>
       </div>
     </button>
+  );
+}
+
+/**
+ * A piece of work filed in a Daily Update that is not one of the tasks in the
+ * list above it. When it points at a task, clicking opens that task; otherwise
+ * it is read-only — the filing itself is the record.
+ */
+function DailyItemRow({ item, onOpenTask }: { item: DailyWorkItem; onOpenTask: (id: number) => void }) {
+  const status = asTaskStatus(item.status);
+  const priority = asPriority(item.priority);
+  const hours = Number(item.hours ?? 0);
+  const clickable = item.task_id !== null;
+
+  const body = (
+    <>
+      <span
+        className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', status ? STATUS_BAR[status] : 'bg-brand/60')}
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <SourceChip kind="daily" />
+          {item.task_number && <span className="font-mono text-[11px] text-faint">{item.task_number}</span>}
+          <p className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{item.title}</p>
+        </div>
+
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          {status ? <StatusBadge status={status} /> : item.status && <Badge variant="outline">{item.status}</Badge>}
+          {priority && <PriorityBadge priority={priority} />}
+          {item.project_name && (
+            <Badge variant="outline" className="gap-1.5">
+              {item.project_color && (
+                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: item.project_color }} />
+              )}
+              {item.project_name}
+            </Badge>
+          )}
+          {item.update_status === 'DRAFT' && (
+            <Badge className="bg-amber-500/12 text-amber-600 dark:text-amber-400">Draft</Badge>
+          )}
+          <span className="text-[11px] text-faint">
+            Filed {fmtDate(item.update_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+          </span>
+          {hours > 0 && (
+            <span className="flex items-center gap-1 text-[11px] text-faint">
+              <Timer className="h-3 w-3" />
+              {fmtHours(hours)}
+            </span>
+          )}
+          {item.topic && <span className="text-[11px] text-faint">{item.topic}</span>}
+        </div>
+
+        {item.description && (
+          <p className="mt-1.5 line-clamp-2 whitespace-pre-line text-xs text-muted">{item.description}</p>
+        )}
+        {item.outcome && (
+          <p className="mt-1 text-xs text-faint">
+            <span className="font-medium text-muted">Outcome: </span>
+            {item.outcome}
+          </p>
+        )}
+        {item.blockers && (
+          <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-red-500">
+            <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
+            {item.blockers}
+          </p>
+        )}
+
+        {item.progress !== null && (
+          <div className="mt-2 flex items-center gap-2">
+            <ProgressBar value={item.progress} className="flex-1" />
+            <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-faint">{item.progress}%</span>
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  const shell = 'flex w-full items-start gap-3 rounded-xl border border-dashed border-brand/30 bg-brand-soft/10 p-3 text-left';
+
+  return clickable ? (
+    <button
+      type="button"
+      onClick={() => onOpenTask(item.task_id as number)}
+      title={item.task_title ? `Open ${item.task_number} — ${item.task_title}` : undefined}
+      className={cn(shell, 'focus-ring transition-colors hover:border-brand/50 hover:bg-line/10')}
+    >
+      {body}
+    </button>
+  ) : (
+    <div className={shell}>{body}</div>
   );
 }
 
@@ -512,7 +693,9 @@ function DateRangeFilter({
             <CalendarRange className="h-4 w-4 text-brand" />
             Date range
           </div>
-          <span className="text-xs text-faint">Filter tasks and Daily Updates together</span>
+          <span className="text-xs text-faint">
+            Filter tasks and Daily Updates together · Daily Update work always uses the filing date
+          </span>
           {active && (
             <button type="button" onClick={onClear} className="focus-ring ml-auto inline-flex items-center gap-1 text-xs font-medium text-brand">
               <X className="h-3.5 w-3.5" /> Clear
@@ -609,6 +792,7 @@ function MemberDetail({
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [dateField, setDateField] = useState<'deadline' | 'created' | 'completed'>('deadline');
+  const [source, setSource] = useState<TaskSource>('all');
   const [openTaskId, setOpenTaskId] = useState<number | null>(null);
   const [assignOpen, setAssignOpen] = useState(false);
 
@@ -622,6 +806,7 @@ function MemberDetail({
     setDateFrom('');
     setDateTo('');
     setDateField('deadline');
+    setSource('all');
   }, [memberId]);
 
   const params = new URLSearchParams({
@@ -638,6 +823,62 @@ function MemberDetail({
     fetcher,
     { keepPreviousData: true },
   );
+
+  // A Daily Update entry that points at a task already in the list is folded
+  // into that task's row; everything else is shown as its own row. That way
+  // the tab lists every piece of work exactly once.
+  const work = useMemo(() => {
+    const tasks = data?.tasks ?? [];
+    const items = data?.daily_items ?? [];
+    const taskIds = new Set(tasks.map((t) => t.id));
+    const logsByTask = new Map<number, DailyWorkItem[]>();
+    const standalone: DailyWorkItem[] = [];
+    for (const item of items) {
+      if (item.task_id !== null && taskIds.has(item.task_id)) {
+        const list = logsByTask.get(item.task_id) ?? [];
+        list.push(item);
+        logsByTask.set(item.task_id, list);
+      } else {
+        standalone.push(item);
+      }
+    }
+    // Grouped by filing day (already newest first from the API).
+    const byDay: Array<{ date: string; items: DailyWorkItem[] }> = [];
+    for (const item of standalone) {
+      const last = byDay[byDay.length - 1];
+      if (last && last.date === item.update_date) last.items.push(item);
+      else byDay.push({ date: item.update_date, items: [item] });
+    }
+
+    // "All work": tasks and filed work in one timeline, one heading per day, so
+    // a day's Daily Update entries sit next to the tasks from that same day
+    // instead of under a long task list. A task lands on the day of the date
+    // being filtered on; with no range it lands on the day it was completed,
+    // or last touched if it is still open.
+    const rangeActive = Boolean(dateFrom || dateTo);
+    const taskDay = (t: MemberTask) => {
+      const pick =
+        dateField === 'completed' ? t.completed_at
+          : dateField === 'created' ? t.created_at
+            : rangeActive ? t.deadline
+              : null;
+      const ts = pick ?? t.completed_at ?? t.updated_at ?? t.created_at;
+      return dateInputValue(new Date(ts));
+    };
+    const feedMap = new Map<string, { tasks: MemberTask[]; items: DailyWorkItem[] }>();
+    const slot = (day: string) => {
+      const s = feedMap.get(day) ?? { tasks: [], items: [] };
+      feedMap.set(day, s);
+      return s;
+    };
+    for (const t of tasks) slot(taskDay(t)).tasks.push(t);
+    for (const item of standalone) slot(item.update_date).items.push(item);
+    const feed = [...feedMap.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([date, s]) => ({ date, ...s }));
+
+    return { logsByTask, standalone, byDay, feed };
+  }, [data, dateField, dateFrom, dateTo]);
 
   if (error) {
     return (
@@ -760,7 +1001,7 @@ function MemberDetail({
       <Tabs
         tabs={[
           { id: 'overview', label: 'Overview' },
-          { id: 'tasks', label: 'Tasks', count: tasks.length },
+          { id: 'tasks', label: 'Tasks', count: tasks.length + work.standalone.length },
           { id: 'daily', label: 'Daily Updates', count: data.daily.length },
           { id: 'activity', label: 'Activity', count: activity.length },
         ]}
@@ -920,35 +1161,173 @@ function MemberDetail({
               <option value="ALL">All statuses</option>
               <option value="overdue">Overdue</option>
               <option value="today">Due today</option>
-              {(Object.keys(status_counts) as TaskStatus[])
-                .filter((s) => status_counts[s] > 0)
+              {/* Task counts are whole-queue; statuses Daily Update work can carry stay listed even at zero. */}
+              {TASK_STATUSES
+                .filter((s) => status_counts[s] > 0 || DAILY_ITEM_STATUSES.includes(s) || s === statusFilter)
                 .map((s) => (
-                  <option key={s} value={s}>{STATUS_LABEL[s]} ({status_counts[s]})</option>
+                  <option key={s} value={s}>
+                    {STATUS_LABEL[s]}{status_counts[s] > 0 ? ` (${status_counts[s]})` : ''}
+                  </option>
                 ))}
             </Select>
+            <div className="inline-flex rounded-lg border border-line bg-surface p-0.5 text-xs" role="group" aria-label="Show">
+              {([
+                ['all', 'All work'],
+                ['tasks', 'Tasks'],
+                ['daily', 'Daily Updates'],
+              ] as Array<[TaskSource, string]>).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={source === value}
+                  onClick={() => setSource(value)}
+                  className={cn(
+                    'focus-ring rounded-md px-2.5 py-1.5 font-medium transition-colors',
+                    source === value ? 'bg-brand-soft text-brand' : 'text-muted hover:text-ink',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <span className="ml-auto text-xs text-faint">
-              {pluralize(tasks.length, 'task')} shown{dateFrom || dateTo ? ' in range' : ''}
+              {[
+                source !== 'daily' && pluralize(tasks.length, 'task'),
+                source !== 'tasks' && pluralize(work.standalone.length, 'Daily Update entry', 'Daily Update entries'),
+              ].filter(Boolean).join(' · ')}{' '}
+              shown{dateFrom || dateTo ? ' in range' : ''}
             </span>
           </div>
 
-          {tasks.length === 0 ? (
-            <EmptyState
-              icon={ClipboardList}
-              title="No tasks match this filter"
-              description={
-                data.can_assign ? `Assign ${user.full_name.split(' ')[0]} something to get started.` : undefined
-              }
-              action={
-                data.can_assign ? (
-                  <Button size="sm" onClick={() => setAssignOpen(true)}><Plus className="h-4 w-4" /> Assign task</Button>
-                ) : undefined
-              }
-            />
-          ) : (
-            <div className="space-y-2">
-              {tasks.map((t) => <TaskRow key={t.id} task={t} onOpen={() => setOpenTaskId(t.id)} />)}
-            </div>
-          )}
+          {(() => {
+            const showTasks = source !== 'daily';
+            const showDaily = source !== 'tasks';
+            const nothing =
+              (!showTasks || tasks.length === 0) && (!showDaily || work.standalone.length === 0);
+
+            if (nothing) {
+              return (
+                <EmptyState
+                  icon={ClipboardList}
+                  title={source === 'daily' ? 'No Daily Update work matches this filter' : 'No work matches this filter'}
+                  description={
+                    bucket && showDaily
+                      ? 'Overdue and due-today apply to tasks only — Daily Update work has no deadline.'
+                      : data.can_assign && source !== 'daily'
+                        ? `Assign ${user.full_name.split(' ')[0]} something to get started.`
+                        : undefined
+                  }
+                  action={
+                    data.can_assign && source !== 'daily' ? (
+                      <Button size="sm" onClick={() => setAssignOpen(true)}><Plus className="h-4 w-4" /> Assign task</Button>
+                    ) : undefined
+                  }
+                />
+              );
+            }
+
+            if (source === 'all') {
+              return (
+                <div className="space-y-4">
+                  <p className="flex flex-wrap items-center gap-2 text-[11px] text-faint">
+                    <SourceChip kind="task" />
+                    <SourceChip kind="daily" />
+                    <span>
+                      One timeline, newest day first. Tasks sit on the day they were
+                      {dateField === 'completed' ? ' completed' : dateField === 'created' ? ' created' : dateFrom || dateTo ? ' due' : ' completed (or last updated, if still open)'}
+                      ; Daily Update work on the day it was filed.
+                    </span>
+                  </p>
+                  {work.feed.map((day) => {
+                    const dayHours = hoursOf(day.items);
+                    return (
+                      <section key={day.date} className="space-y-2">
+                        <h3 className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-line pb-1 text-xs font-semibold text-ink">
+                          {fmtDate(day.date, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}
+                          <span className="font-normal text-faint">
+                            {[
+                              day.tasks.length > 0 && pluralize(day.tasks.length, 'task'),
+                              day.items.length > 0 && pluralize(day.items.length, 'Daily Update entry', 'Daily Update entries'),
+                              dayHours > 0 && `${fmtHours(dayHours)} logged`,
+                            ].filter(Boolean).join(' · ')}
+                          </span>
+                        </h3>
+                        {day.tasks.map((t) => (
+                          <TaskRow
+                            key={`t-${t.id}`}
+                            task={t}
+                            logs={work.logsByTask.get(t.id)}
+                            onOpen={() => setOpenTaskId(t.id)}
+                            showSource
+                          />
+                        ))}
+                        {day.items.map((item) => (
+                          <DailyItemRow key={`d-${item.id}`} item={item} onOpenTask={setOpenTaskId} />
+                        ))}
+                      </section>
+                    );
+                  })}
+                </div>
+              );
+            }
+
+            const sectioned = showTasks && showDaily && tasks.length > 0 && work.standalone.length > 0;
+
+            return (
+              <div className="space-y-5">
+                {showTasks && tasks.length > 0 && (
+                  <section className="space-y-2">
+                    {sectioned && (
+                      <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-faint">
+                        <ClipboardList className="h-3.5 w-3.5" /> Tasks
+                        <span className="font-normal normal-case tracking-normal">({tasks.length})</span>
+                      </h3>
+                    )}
+                    {tasks.map((t) => (
+                      <TaskRow
+                        key={t.id}
+                        task={t}
+                        logs={work.logsByTask.get(t.id)}
+                        onOpen={() => setOpenTaskId(t.id)}
+                        showSource
+                      />
+                    ))}
+                  </section>
+                )}
+
+                {showDaily && work.standalone.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-faint">
+                        <NotebookPen className="h-3.5 w-3.5" /> From Daily Updates
+                        <span className="font-normal normal-case tracking-normal">({work.standalone.length})</span>
+                      </h3>
+                      <span className="text-[11px] text-faint">
+                        Work filed in a Daily Update that isn&apos;t one of the tasks {sectioned ? 'above' : 'listed'}
+                      </span>
+                      <span className="ml-auto text-[11px] text-faint">
+                        {fmtHours(hoursOf(work.standalone))} logged
+                      </span>
+                    </div>
+                    {work.byDay.map((day) => (
+                      <div key={day.date} className="space-y-2">
+                        <p className="flex items-center gap-2 text-[11px] font-medium text-muted">
+                          {fmtDate(day.date, { weekday: 'long', month: 'short', day: 'numeric' })}
+                          <span className="text-faint">
+                            · {pluralize(day.items.length, 'entry', 'entries')}
+                            {hoursOf(day.items) > 0 && ` · ${fmtHours(hoursOf(day.items))}`}
+                          </span>
+                        </p>
+                        {day.items.map((item) => (
+                          <DailyItemRow key={item.id} item={item} onOpenTask={setOpenTaskId} />
+                        ))}
+                      </div>
+                    ))}
+                  </section>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 

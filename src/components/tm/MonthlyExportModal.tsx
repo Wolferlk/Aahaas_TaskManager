@@ -34,6 +34,8 @@ interface Preview {
   daily: Array<{ day: number; created: number; completed: number }>;
   sheets: {
     tasks: number;
+    /** Daily Update entries listed in All Tasks alongside the tasks (null when excluded). */
+    daily_entries?: number | null;
     people: number;
     projects: number;
     teams: number;
@@ -289,7 +291,13 @@ export function MonthlyExportModal({ open, onClose }: { open: boolean; onClose: 
                 <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">Inside the workbook</p>
                 <ul className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
                   <SheetItem icon={CalendarDays} name="Daily Activity" detail="calendar heatmap" />
-                  <SheetItem icon={ClipboardList} name="All Tasks" detail={`${data.sheets.tasks} rows`} />
+                  <SheetItem
+                    icon={ClipboardList}
+                    name="All Tasks"
+                    detail={data.sheets.daily_entries
+                      ? `${data.sheets.tasks} tasks + ${data.sheets.daily_entries} Daily Update entries`
+                      : `${data.sheets.tasks} rows`}
+                  />
                   <SheetItem icon={Users} name="People" detail={`${data.sheets.people} people`} />
                   <SheetItem icon={FolderKanban} name="Projects" detail={`${data.sheets.projects} projects`} />
                   <SheetItem icon={UsersRound} name="Teams" detail={`${data.sheets.teams} teams`} />
