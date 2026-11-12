@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Misc';
 import { useToast } from '@/components/ui/Toast';
 import { MonthlyExportModal } from '@/components/tm/MonthlyExportModal';
+import { CHART_TOOLTIP, BAR_CURSOR } from '@/lib/chartTooltip';
 
 interface ReportsData {
   overview: Record<string, number>;
@@ -26,6 +27,7 @@ interface ReportsData {
 
 const PRIORITY_COLORS: Record<string, string> = { CRITICAL: '#ef4444', HIGH: '#f97316', MEDIUM: '#f59e0b', LOW: '#0ea5e9' };
 const BRAND = '#4f46e5';
+const TOOLTIP_PROPS = CHART_TOOLTIP;
 
 export default function ReportsPage() {
   const { data, isLoading } = useSWR<ReportsData>('/api/tm/reports', fetcher);
@@ -95,7 +97,7 @@ export default function ReportsPage() {
                       <CartesianGrid strokeDasharray="3 3" className="stroke-line" />
                       <XAxis dataKey="day" hide />
                       <YAxis width={28} tick={{ fontSize: 11 }} />
-                      <Tooltip />
+                      <Tooltip {...TOOLTIP_PROPS} />
                       <Line type="monotone" dataKey="created" stroke="#94a3b8" strokeWidth={2} dot={false} name="Created" />
                       <Line type="monotone" dataKey="completed" stroke={BRAND} strokeWidth={2} dot={false} name="Completed" />
                     </LineChart>
@@ -111,7 +113,7 @@ export default function ReportsPage() {
                       <Pie data={data.by_priority} dataKey="c" nameKey="priority" innerRadius={50} outerRadius={80} paddingAngle={2}>
                         {data.by_priority.map((p) => <Cell key={p.priority} fill={PRIORITY_COLORS[p.priority] ?? '#94a3b8'} />)}
                       </Pie>
-                      <Tooltip />
+                      <Tooltip {...TOOLTIP_PROPS} />
                     </PieChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -125,7 +127,7 @@ export default function ReportsPage() {
                       <CartesianGrid strokeDasharray="3 3" className="stroke-line" />
                       <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                       <YAxis width={28} tick={{ fontSize: 11 }} />
-                      <Tooltip />
+                      <Tooltip {...TOOLTIP_PROPS} cursor={BAR_CURSOR} />
                       <Bar dataKey="completed" fill="#10b981" radius={[4, 4, 0, 0]} name="Completed" />
                       <Bar dataKey="overdue" fill="#ef4444" radius={[4, 4, 0, 0]} name="Overdue" />
                     </BarChart>

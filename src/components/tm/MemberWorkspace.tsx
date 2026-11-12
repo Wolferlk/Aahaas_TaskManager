@@ -24,6 +24,7 @@ import { TaskDrawer } from './TaskDrawer';
 import { TaskFormModal } from './TaskFormModal';
 import { OriginalText } from './OriginalText';
 import { SourceChip } from './SourceChip';
+import { CHART_TOOLTIP } from '@/lib/chartTooltip';
 
 /* ------------------------------------------------------------------ *
  * Shapes
@@ -1035,6 +1036,7 @@ function MemberDetail({
                   />
                   <YAxis width={28} allowDecimals={false} tick={{ fontSize: 10 }} />
                   <Tooltip
+                    {...CHART_TOOLTIP}
                     labelFormatter={(d) => fmtDate(String(d), { weekday: 'short', month: 'short', day: 'numeric' })}
                   />
                   <Area type="monotone" dataKey="completed" name="Completed" stroke={BRAND} strokeWidth={2} fill="url(#mwDone)" />
