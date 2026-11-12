@@ -451,12 +451,22 @@ function pickPriority(value: unknown): string | null {
 }
 
 const DONE = /\b(completed|finished|done|deployed|delivered|fixed|resolved|closed|added|implemented|improved|updated|refactored|developed|extended|enhanced|integrated|built)\b/i;
-const BLOCKED = /\b(blocked|waiting|stuck|pending|on hold)\b/i;
+const BLOCKED = /\b(blocked|waiting|awaiting|stuck|pending|on hold)\b/i;
+/** The softer half of BLOCKED: held on someone else, rather than stuck. */
+const WAITING = /\b(waiting|awaiting|pending|on hold)\b/i;
 const STARTED = /\b(started|began|working on|in progress|continued|ongoing)\b/i;
 
 /** Everything a line yields without a model — also the per-line safety net. */
 function deterministicItem(line: string): Partial<ParsedItem> {
-  const status = BLOCKED.test(line) ? 'BLOCKED' : DONE.test(line) ? 'COMPLETED' : STARTED.test(line) ? 'IN_PROGRESS' : 'IN_PROGRESS';
+  const status = /\b(blocked|stuck)\b/i.test(line)
+    ? 'BLOCKED'
+    : WAITING.test(line)
+      ? 'WAITING'
+      : DONE.test(line)
+        ? 'COMPLETED'
+        : STARTED.test(line)
+          ? 'IN_PROGRESS'
+          : 'IN_PROGRESS';
   const hours = line.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hours)\b/i);
   const words = oneLine(line).split(' ');
 
@@ -466,7 +476,7 @@ function deterministicItem(line: string): Partial<ParsedItem> {
     work_detail: sentence(line),
     status,
     priority: /\b(urgent|critical|asap)\b/i.test(line) ? 'HIGH' : 'MEDIUM',
-    progress: status === 'COMPLETED' ? 100 : status === 'BLOCKED' ? 40 : 50,
+    progress: status === 'COMPLETED' ? 100 : status === 'BLOCKED' || status === 'WAITING' ? 40 : 50,
     hours: hours ? Number(hours[1]) : null,
     blockers: BLOCKED.test(line) ? oneLine(line) : null,
     confidence: 0.4,
@@ -694,14 +704,20 @@ const REMAINING = /\b(remains? (?:pending|open|outstanding|to be)|remaining|pend
 function deterministicBlockItem(block: TaskBlock): Partial<ParsedItem> {
   const text = block.body || block.title;
   const done = DONE.test(text) || /\b(created|performed|enabled|removed|investigated|committed|documented|tested|verified|introduced|maintained|confirmed)\b/i.test(text);
-  const status = /\bblocked\b/i.test(text) ? 'BLOCKED' : done ? 'COMPLETED' : 'IN_PROGRESS';
+  const status = /\bblocked\b/i.test(text)
+    ? 'BLOCKED'
+    : /\b(waiting|awaiting|on hold)\b/i.test(text)
+      ? 'WAITING'
+      : done
+        ? 'COMPLETED'
+        : 'IN_PROGRESS';
   const remaining = text.split(/(?<=[.!?])\s+/).filter((s) => REMAINING.test(s));
 
   return {
     ...deterministicItem(text),
     title: block.title,
     status,
-    progress: status === 'COMPLETED' ? 100 : status === 'BLOCKED' ? 40 : 50,
+    progress: status === 'COMPLETED' ? 100 : status === 'BLOCKED' || status === 'WAITING' ? 40 : 50,
     blockers: null,
     next_steps: remaining.join(' ') || null,
     confidence: 0.6,
@@ -919,8 +935,12 @@ function buildDaySummary(stats: Record<string, unknown>, items: Array<{ status: 
   const completed = items.filter((i) => i.status === 'COMPLETED').length;
   const progress = items.filter((i) => i.status === 'IN_PROGRESS').length;
   const blocked = items.filter((i) => i.status === 'BLOCKED').length;
+  const waiting = items.filter((i) => i.status === 'WAITING').length;
+  const review = items.filter((i) => i.status === 'REVIEW').length;
   const parts = [`${completed} item${completed === 1 ? '' : 's'} completed`];
   if (progress) parts.push(`${progress} in progress`);
+  if (review) parts.push(`${review} in review`);
+  if (waiting) parts.push(`${waiting} waiting`);
   if (blocked) parts.push(`${blocked} blocked`);
   const hours = Number(stats.total_hours ?? 0);
   return `${parts.join(', ')}${hours ? `, ${hours}h recorded` : ''}.`;

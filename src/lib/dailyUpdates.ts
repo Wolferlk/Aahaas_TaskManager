@@ -1,9 +1,20 @@
 import 'server-only';
 import { z } from 'zod';
-import { execute, query, transaction } from './db';
+import { execute, query, queryOne, transaction } from './db';
 import { audit } from './api';
 import { dailyUpdateSchema } from './validation';
-import { logActivity, nextTaskNumber, teamMemberIds } from './tasks';
+import {
+  logActivity,
+  logStatusChange,
+  nextTaskNumber,
+  refreshParentProgress,
+  refreshProjectProgress,
+  reviewerFor,
+  syncCompletionApproval,
+  teamMemberIds,
+} from './tasks';
+import { notify, notifyMany, taskStakeholderIds } from './notifications';
+import { STATUS_LABEL, type TaskStatus } from './types';
 import { AI_MODEL, detailedDaySummary, type DaySummaryItem } from './ai';
 import { graphConfigured, sendMail } from './graphMail';
 import { resolveDailyUpdateRecipients } from './dailyMail';
@@ -211,6 +222,128 @@ async function deliverDailyUpdateMail(ctx: {
   }
 }
 
+/** The statuses a work item can hand to the task it is linked to. */
+const DAILY_TASK_STATUSES = new Set<string>(['IN_PROGRESS', 'BLOCKED', 'WAITING', 'REVIEW', 'COMPLETED']);
+/** Statuses a work log never moves a task out of. */
+const CLOSED_TASK_STATUSES = new Set<string>(['COMPLETED', 'CANCELLED', 'REJECTED']);
+
+/**
+ * Moves a linked task to the status its work item reported, following the
+ * same rules as changing the status on the task itself: a task that needs
+ * approval goes to Review rather than straight to Completed, the history and
+ * the Approval Center are kept in step, and the people above it are told.
+ *
+ * A daily update is a work log, not a workflow tool, so it never reopens a
+ * closed task and never pulls a task out of Review except to complete it —
+ * an item left on its default "In Progress" must not withdraw a review.
+ */
+async function applyDailyStatus(
+  user: SessionUser,
+  taskId: number,
+  requested: string,
+  blockers: string | null,
+  date: string,
+): Promise<void> {
+  if (!DAILY_TASK_STATUSES.has(requested)) return;
+
+  const task = await queryOne<{
+    id: number;
+    title: string;
+    status: TaskStatus;
+    assignee_id: number | null;
+    created_by: number;
+    team_id: number | null;
+    department_id: number | null;
+    approval_required: number;
+    parent_task_id: number | null;
+    project_id: number | null;
+  }>(
+    `SELECT id, title, status, assignee_id, created_by, team_id, department_id, approval_required,
+            parent_task_id, project_id
+       FROM tm_tasks WHERE id = ? AND deleted_at IS NULL`,
+    [taskId],
+  );
+  // Only the assignee's own day moves the task, as before.
+  if (!task || task.assignee_id !== user.id) return;
+
+  const from = task.status;
+  if (CLOSED_TASK_STATUSES.has(from)) return;
+
+  let to = requested as TaskStatus;
+  if (to === 'COMPLETED' && task.approval_required && user.role === 'EMPLOYEE') to = 'REVIEW';
+  if (from === 'REVIEW' && to !== 'COMPLETED') return;
+  if (to === from) return;
+
+  const reason = `From the daily update for ${date}`;
+  const holdReason = (to === 'BLOCKED' || to === 'WAITING') && blockers?.trim() ? blockers.trim().slice(0, 500) : null;
+
+  await execute(
+    `UPDATE tm_tasks
+        SET status = ?,
+            progress = CASE WHEN ? = 'COMPLETED' THEN 100 ELSE progress END,
+            completed_at = CASE WHEN ? = 'COMPLETED' THEN NOW() ELSE completed_at END,
+            submitted_at = CASE WHEN ? = 'REVIEW' THEN NOW() ELSE submitted_at END,
+            blocked_reason = COALESCE(?, blocked_reason)
+      WHERE id = ?`,
+    [to, to, to, to, holdReason, taskId],
+  );
+
+  await logStatusChange(taskId, from, to, user.id, reason);
+  await logActivity(taskId, user.id, 'STATUS_CHANGED', 'status', from, to);
+
+  const reviewerId = await reviewerFor(task);
+  await syncCompletionApproval({
+    taskId,
+    title: task.title,
+    fromStatus: from,
+    toStatus: to,
+    actorId: user.id,
+    reviewerId,
+    comment: reason,
+  });
+
+  const link = `/tm/tasks?task=${taskId}`;
+  if (to === 'REVIEW') {
+    await notify({
+      userId: reviewerId,
+      type: 'TASK_REVIEW_REQUESTED',
+      title: `Review requested: ${task.title}`,
+      body: `${user.full_name} submitted this task for review in their daily update.`,
+      link,
+      entityType: 'TASK',
+      entityId: taskId,
+      actorId: user.id,
+      priority: 'HIGH',
+    });
+  }
+  if (to === 'COMPLETED' && task.created_by !== user.id) {
+    await notify({
+      userId: task.created_by,
+      type: 'TASK_COMPLETED',
+      title: `Completed: ${task.title}`,
+      link,
+      entityType: 'TASK',
+      entityId: taskId,
+      actorId: user.id,
+    });
+  }
+
+  const supervisors = (await taskStakeholderIds(task)).filter((uid) => uid !== user.id && uid !== task.created_by);
+  await notifyMany(supervisors, {
+    type: 'TASK_STATUS_UPDATED',
+    title: `${STATUS_LABEL[to] ?? to}: ${task.title}`,
+    body: `${user.full_name} moved this from ${STATUS_LABEL[from] ?? from} in their daily update.`,
+    link,
+    entityType: 'TASK',
+    entityId: taskId,
+    actorId: user.id,
+    priority: to === 'BLOCKED' ? 'HIGH' : 'NORMAL',
+  });
+
+  if (task.parent_task_id) await refreshParentProgress(task.parent_task_id);
+  await refreshProjectProgress(task.project_id);
+}
+
 export async function saveDailyUpdate(
   user: SessionUser,
   payload: DailyUpdatePayload,
@@ -227,17 +360,26 @@ export async function saveDailyUpdate(
   // Tasks this day had already moved forward before this save. Re-saving an
   // edited day must not add its hours or log the attachment a second time.
   const alreadyAttached = new Set<number>();
+  // The status each attached task carried in the previous save of this day, so
+  // an edit only pushes a status onto the task when the person changed it.
+  const previousStatus = new Map<number, string | null>();
+  // Tasks raised by this save, for their first status-history row.
+  const createdTasks: Array<{ id: number; status: string }> = [];
   let isEdit = false;
 
   const updateId = await transaction(async (cx) => {
     const [previous] = (await cx.query(
-      `SELECT i.task_id FROM tm_daily_updates d
+      `SELECT i.task_id, i.status FROM tm_daily_updates d
          LEFT JOIN tm_daily_update_items i ON i.daily_update_id = d.id AND i.linked_action = 'ATTACHED'
         WHERE d.user_id = ? AND d.update_date = ?`,
       [user.id, body.update_date],
-    )) as [Array<{ task_id: number | null }>, unknown];
+    )) as [Array<{ task_id: number | null; status: string | null }>, unknown];
     isEdit = previous.length > 0;
-    for (const p of previous) if (p.task_id) alreadyAttached.add(p.task_id);
+    for (const p of previous) {
+      if (!p.task_id) continue;
+      alreadyAttached.add(p.task_id);
+      previousStatus.set(p.task_id, p.status);
+    }
 
     const [res] = await cx.query(
       `INSERT INTO tm_daily_updates
@@ -303,16 +445,17 @@ export async function saveDailyUpdate(
           ],
         );
         taskId = (created as { insertId: number }).insertId;
+        createdTasks.push({ id: taskId, status: (item.status as string) || 'IN_PROGRESS' });
       } else if (item.linked_action === 'ATTACHED' && taskId && !alreadyAttached.has(taskId)) {
-        // Attaching only moves the task forward; it never rewrites its definition.
+        // Attaching only moves the task forward; it never rewrites its
+        // definition. The status move is applied after the commit by
+        // `applyDailyStatus`, which also records and announces it.
         await cx.query(
           `UPDATE tm_tasks
               SET progress = GREATEST(progress, ?),
-                  actual_hours = COALESCE(actual_hours, 0) + ?,
-                  status = CASE WHEN ? = 'COMPLETED' THEN 'COMPLETED' ELSE status END,
-                  completed_at = CASE WHEN ? = 'COMPLETED' AND completed_at IS NULL THEN NOW() ELSE completed_at END
+                  actual_hours = COALESCE(actual_hours, 0) + ?
             WHERE id = ? AND assignee_id = ?`,
-          [item.progress ?? 0, item.hours ?? 0, item.status ?? '', item.status ?? '', taskId, user.id],
+          [item.progress ?? 0, item.hours ?? 0, taskId, user.id],
         );
       }
 
@@ -387,9 +530,24 @@ export async function saveDailyUpdate(
 
   // Task activity is logged outside the transaction so a logging hiccup
   // cannot roll back the user's saved update.
+  for (const created of createdTasks) {
+    await logStatusChange(created.id, null, created.status as TaskStatus, user.id, `Created from the daily update for ${body.update_date}`);
+  }
   for (const item of body.items) {
-    if (item.task_id && item.linked_action === 'ATTACHED' && !alreadyAttached.has(item.task_id)) {
-      await logActivity(item.task_id, user.id, 'DAILY_UPDATE_ATTACHED', null, null, item.title);
+    if (!item.task_id || item.linked_action !== 'ATTACHED') continue;
+    const fresh = !alreadyAttached.has(item.task_id);
+    if (fresh) await logActivity(item.task_id, user.id, 'DAILY_UPDATE_ATTACHED', null, null, item.title);
+
+    // The status reported for a linked task is the task's status: Blocked,
+    // Waiting, Review and Completed all reach Team Tasks, not just Completed.
+    // Re-saving a day only re-applies it when the person actually changed it,
+    // so fixing a typo never undoes a move someone else made since.
+    if (item.status && (fresh || previousStatus.get(item.task_id) !== item.status)) {
+      try {
+        await applyDailyStatus(user, item.task_id, item.status, item.blockers ?? body.blockers ?? null, body.update_date);
+      } catch (err) {
+        console.error('[tm] daily update status sync failed for task', item.task_id, err);
+      }
     }
   }
 

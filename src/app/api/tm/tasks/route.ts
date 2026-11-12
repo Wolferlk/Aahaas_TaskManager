@@ -21,6 +21,9 @@ import {
   taskScope,
 } from '@/lib/tasks';
 import { notify, notifyMany, taskStakeholderIds } from '@/lib/notifications';
+import { dailyUpdateScope } from '@/lib/dailyUpdates';
+import { hideDevAdmin } from '@/lib/devAdmin';
+import type { SessionUser } from '@/lib/types';
 
 const SORTABLE: Record<string, string> = {
   created_at: 't.created_at',
@@ -32,6 +35,206 @@ const SORTABLE: Record<string, string> = {
   progress: 't.progress',
   task_number: 't.task_number',
 };
+
+const TASK_COLUMNS = `t.id, t.task_number, t.title, t.status, t.priority, t.progress, t.task_type,
+                t.deadline, t.start_date, t.created_at, t.updated_at, t.completed_at,
+                t.estimated_hours, t.actual_hours, t.visibility, t.is_personal, t.approval_required,
+                t.assignee_id, t.created_by, t.project_id, t.team_id, t.department_id, t.parent_task_id,
+                a.full_name AS assignee_name, a.avatar_url AS assignee_avatar,
+                c.full_name AS creator_name,
+                p.name AS project_name, p.color AS project_color,
+                tm.name AS team_name, d.name AS department_name, cat.name AS category_name,
+                (SELECT COUNT(*) FROM tm_tasks s WHERE s.parent_task_id = t.id AND s.deleted_at IS NULL) AS subtask_count,
+                (SELECT COUNT(*) FROM tm_tasks s WHERE s.parent_task_id = t.id AND s.deleted_at IS NULL AND s.status = 'COMPLETED') AS subtask_done,
+                (SELECT COUNT(*) FROM tm_task_comments cm WHERE cm.task_id = t.id AND cm.deleted_at IS NULL) AS comment_count,
+                (SELECT COUNT(*) FROM tm_task_checklists ck WHERE ck.task_id = t.id) AS checklist_count,
+                (SELECT COUNT(*) FROM tm_task_checklists ck WHERE ck.task_id = t.id AND ck.is_done = 1) AS checklist_done,
+                (t.deadline IS NOT NULL AND t.deadline < NOW() AND t.status NOT IN ('COMPLETED','CANCELLED')) AS is_overdue`;
+
+const TASK_FROM = `FROM tm_tasks t
+           LEFT JOIN tm_users a ON a.id = t.assignee_id
+           LEFT JOIN tm_users c ON c.id = t.created_by
+           LEFT JOIN tm_projects p ON p.id = t.project_id
+           LEFT JOIN tm_teams tm ON tm.id = t.team_id
+           LEFT JOIN tm_departments d ON d.id = t.department_id
+           LEFT JOIN tm_task_categories cat ON cat.id = t.category_id`;
+
+/** Tables behind a Daily Update entry, aliased so the filters below can refer to them. */
+const DAILY_FROM = `FROM tm_daily_update_items i
+           JOIN tm_daily_updates du ON du.id = i.daily_update_id
+           JOIN tm_users dau ON dau.id = du.user_id
+           LEFT JOIN tm_tasks lt ON lt.id = i.task_id AND lt.deleted_at IS NULL`;
+
+/**
+ * How Daily Update entries sort next to tasks. An entry has no deadline or
+ * task number, so those sorts put it after every task; "newest" places it on
+ * the day it was filed for, at the time it was written.
+ */
+const DAILY_SORT: Record<string, string> = {
+  created_at: 'TIMESTAMP(du.update_date, TIME(i.created_at))',
+  updated_at: 'TIMESTAMP(du.update_date, TIME(i.created_at))',
+  deadline: 'NULL',
+  priority: "FIELD(i.priority,'CRITICAL','HIGH','MEDIUM','LOW')",
+  status: 'i.status',
+  title: 'i.title',
+  progress: 'i.progress',
+  task_number: 'NULL',
+};
+
+interface DailyFilter {
+  /** Set when a filter in use has no meaning for a Daily Update entry (deadline, team, …). */
+  excluded: boolean;
+  where: string;
+  params: unknown[];
+}
+
+/**
+ * The Daily Update entries that belong in Team Tasks, filtered the same way
+ * as the task list. Returns null when the reader may not see other people's
+ * Daily Updates, so the option is never offered to them.
+ *
+ * An entry tied to a live, shared task is left out: that task is already a
+ * row of its own, and listing both would count the same work twice.
+ */
+async function teamDailyFilter(user: SessionUser, sp: URLSearchParams): Promise<DailyFilter | null> {
+  const scope = await dailyUpdateScope(user);
+  if (!scope.canViewOthers) return null;
+
+  const where: string[] = [hideDevAdmin('dau'), '(lt.id IS NULL OR lt.is_personal = 1)'];
+  const params: unknown[] = [];
+
+  if (scope.userIds !== null) {
+    where.push('du.user_id IN (?)');
+    params.push(scope.userIds);
+  }
+  // Same rule as the task list: a Manager's own work lives in their own views.
+  if (user.role === 'MANAGER') {
+    where.push('du.user_id <> ?');
+    params.push(user.id);
+  }
+
+  const notApplicable = [
+    'created_by', 'team_id', 'department_id', 'category_id', 'parent_task_id',
+    'task_type', 'deadline_from', 'deadline_to',
+  ].some((key) => {
+    const v = sp.get(key);
+    return v !== null && v !== '' && v !== 'ALL';
+  });
+
+  for (const [key, column] of [['status', 'i.status'], ['priority', 'i.priority']] as const) {
+    const raw = sp.get(key);
+    if (!raw || raw === 'ALL') continue;
+    const list = raw.split(',').filter(Boolean);
+    if (!list.length) continue;
+    where.push(`${column} IN (?)`);
+    params.push(list);
+  }
+
+  const assignee = sp.get('assignee_id');
+  if (assignee) {
+    where.push('du.user_id = ?');
+    params.push(Number(assignee));
+  }
+  const project = sp.get('project_id');
+  if (project) {
+    where.push('i.project_id = ?');
+    params.push(Number(project));
+  }
+
+  const q = sp.get('q');
+  if (q) {
+    where.push('(i.title LIKE ? OR i.topic LIKE ? OR i.description LIKE ?)');
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+  }
+
+  return { excluded: notApplicable, where: where.join(' AND '), params };
+}
+
+/**
+ * One page of tasks and Daily Update entries together. The two are merged and
+ * paged in SQL, so sorting and page boundaries hold across both kinds; the
+ * full rows are then loaded for just the ids on the page.
+ */
+async function mixedWorkPage(opts: {
+  includeTasks: boolean;
+  taskWhere: string;
+  taskParams: unknown[];
+  taskSort: string;
+  daily: DailyFilter;
+  sortKey: string;
+  dir: 'ASC' | 'DESC';
+  page: number;
+  limit: number;
+}) {
+  const { includeTasks, taskWhere, taskParams, taskSort, daily, sortKey, dir, page, limit } = opts;
+  const includeDaily = !daily.excluded;
+
+  const parts: string[] = [];
+  const unionParams: unknown[] = [];
+  if (includeTasks) {
+    parts.push(`SELECT 'task' AS kind, t.id AS id, ${taskSort} AS sk FROM tm_tasks t WHERE ${taskWhere}`);
+    unionParams.push(...taskParams);
+  }
+  if (includeDaily) {
+    const dailySort = DAILY_SORT[sortKey] ?? DAILY_SORT.created_at;
+    parts.push(`SELECT 'daily' AS kind, i.id AS id, ${dailySort} AS sk ${DAILY_FROM} WHERE ${daily.where}`);
+    unionParams.push(...daily.params);
+  }
+
+  const empty = {
+    tasks: [],
+    daily_items: [],
+    order: [],
+    daily_available: true,
+    pagination: { page, limit, total: 0, pages: 1 },
+  };
+  if (!parts.length) return empty;
+
+  const [keys, taskCount, dailyCount] = await Promise.all([
+    query<{ kind: 'task' | 'daily'; id: number }>(
+      `SELECT kind, id FROM (${parts.join(' UNION ALL ')}) work
+        ORDER BY sk IS NULL, sk ${dir}, kind DESC, id DESC
+        LIMIT ? OFFSET ?`,
+      [...unionParams, limit, (page - 1) * limit],
+    ),
+    includeTasks
+      ? queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM tm_tasks t WHERE ${taskWhere}`, taskParams)
+      : Promise.resolve({ total: 0 }),
+    includeDaily
+      ? queryOne<{ total: number }>(`SELECT COUNT(*) AS total ${DAILY_FROM} WHERE ${daily.where}`, daily.params)
+      : Promise.resolve({ total: 0 }),
+  ]);
+
+  const taskIds = keys.filter((k) => k.kind === 'task').map((k) => Number(k.id));
+  const itemIds = keys.filter((k) => k.kind === 'daily').map((k) => Number(k.id));
+
+  const [tasks, items] = await Promise.all([
+    taskIds.length ? query(`SELECT ${TASK_COLUMNS} ${TASK_FROM} WHERE t.id IN (?)`, [taskIds]) : Promise.resolve([]),
+    itemIds.length
+      ? query(
+          `SELECT i.id, i.daily_update_id, DATE_FORMAT(du.update_date, '%Y-%m-%d') AS update_date,
+                  du.status AS update_status, du.user_id,
+                  dau.full_name AS user_name, dau.avatar_url AS user_avatar,
+                  i.title, i.topic, i.description, i.work_type, i.status, i.priority, i.progress,
+                  i.hours, i.blockers, i.outcome, i.created_at,
+                  pr.name AS project_name, pr.color AS project_color
+             ${DAILY_FROM}
+             LEFT JOIN tm_projects pr ON pr.id = i.project_id
+            WHERE i.id IN (?)`,
+          [itemIds],
+        )
+      : Promise.resolve([]),
+  ]);
+
+  const total = Number(taskCount?.total ?? 0) + Number(dailyCount?.total ?? 0);
+  return {
+    tasks,
+    daily_items: items,
+    order: keys.map((k) => ({ kind: k.kind, id: Number(k.id) })),
+    daily_available: true,
+    pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
+  };
+}
 
 export async function GET(req: Request) {
   try {
@@ -163,29 +366,33 @@ export async function GET(req: Request) {
 
     const whereSql = where.join(' AND ');
 
+    // Team Tasks can also list the work people filed in their Daily Updates.
+    // Only offered to readers who may see other people's Daily Updates.
+    const daily = view === 'team' ? await teamDailyFilter(user, sp) : null;
+    const requestedSource = sp.get('source');
+    const source: 'tasks' | 'all' | 'daily' =
+      daily && (requestedSource === 'all' || requestedSource === 'daily') ? requestedSource : 'tasks';
+
+    if (source !== 'tasks' && daily) {
+      return NextResponse.json(
+        await mixedWorkPage({
+          includeTasks: source === 'all',
+          taskWhere: whereSql,
+          taskParams: params,
+          taskSort: sortCol,
+          daily,
+          sortKey,
+          dir,
+          page,
+          limit,
+        }),
+      );
+    }
+
     const [rows, totalRow] = await Promise.all([
       query(
-        `SELECT t.id, t.task_number, t.title, t.status, t.priority, t.progress, t.task_type,
-                t.deadline, t.start_date, t.created_at, t.updated_at, t.completed_at,
-                t.estimated_hours, t.actual_hours, t.visibility, t.is_personal, t.approval_required,
-                t.assignee_id, t.created_by, t.project_id, t.team_id, t.department_id, t.parent_task_id,
-                a.full_name AS assignee_name, a.avatar_url AS assignee_avatar,
-                c.full_name AS creator_name,
-                p.name AS project_name, p.color AS project_color,
-                tm.name AS team_name, d.name AS department_name, cat.name AS category_name,
-                (SELECT COUNT(*) FROM tm_tasks s WHERE s.parent_task_id = t.id AND s.deleted_at IS NULL) AS subtask_count,
-                (SELECT COUNT(*) FROM tm_tasks s WHERE s.parent_task_id = t.id AND s.deleted_at IS NULL AND s.status = 'COMPLETED') AS subtask_done,
-                (SELECT COUNT(*) FROM tm_task_comments cm WHERE cm.task_id = t.id AND cm.deleted_at IS NULL) AS comment_count,
-                (SELECT COUNT(*) FROM tm_task_checklists ck WHERE ck.task_id = t.id) AS checklist_count,
-                (SELECT COUNT(*) FROM tm_task_checklists ck WHERE ck.task_id = t.id AND ck.is_done = 1) AS checklist_done,
-                (t.deadline IS NOT NULL AND t.deadline < NOW() AND t.status NOT IN ('COMPLETED','CANCELLED')) AS is_overdue
-           FROM tm_tasks t
-           LEFT JOIN tm_users a ON a.id = t.assignee_id
-           LEFT JOIN tm_users c ON c.id = t.created_by
-           LEFT JOIN tm_projects p ON p.id = t.project_id
-           LEFT JOIN tm_teams tm ON tm.id = t.team_id
-           LEFT JOIN tm_departments d ON d.id = t.department_id
-           LEFT JOIN tm_task_categories cat ON cat.id = t.category_id
+        `SELECT ${TASK_COLUMNS}
+           ${TASK_FROM}
           WHERE ${whereSql}
           ORDER BY ${sortCol} ${dir}, t.id DESC
           LIMIT ? OFFSET ?`,
@@ -197,6 +404,7 @@ export async function GET(req: Request) {
     const total = Number(totalRow?.total ?? 0);
     return NextResponse.json({
       tasks: rows,
+      daily_available: daily !== null,
       pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
     });
   } catch (err) {

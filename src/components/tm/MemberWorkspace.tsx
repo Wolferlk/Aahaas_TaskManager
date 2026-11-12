@@ -23,6 +23,7 @@ import { Tabs } from '@/components/ui/Tabs';
 import { TaskDrawer } from './TaskDrawer';
 import { TaskFormModal } from './TaskFormModal';
 import { OriginalText } from './OriginalText';
+import { SourceChip } from './SourceChip';
 
 /* ------------------------------------------------------------------ *
  * Shapes
@@ -363,28 +364,6 @@ function RosterRow({ member, selected, onSelect }: { member: MemberRow; selected
 /* ------------------------------------------------------------------ *
  * Detail tabs
  * ------------------------------------------------------------------ */
-
-/**
- * Where a card in the Tasks tab came from. Both kinds sit in one list under
- * "All work", so each card says what it is in the same spot and colour.
- */
-function SourceChip({ kind }: { kind: 'task' | 'daily' }) {
-  const isTask = kind === 'task';
-  const Icon = isTask ? ClipboardList : NotebookPen;
-  return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset',
-        isTask
-          ? 'bg-sky-500/10 text-sky-700 ring-sky-500/25 dark:text-sky-300'
-          : 'bg-violet-500/10 text-violet-700 ring-violet-500/25 dark:text-violet-300',
-      )}
-    >
-      <Icon className="h-3 w-3" aria-hidden />
-      {isTask ? 'Task' : 'Daily Update'}
-    </span>
-  );
-}
 
 function TaskRow({
   task,
