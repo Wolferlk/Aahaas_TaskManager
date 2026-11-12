@@ -5,7 +5,7 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import {
   Plus, NotebookPen, ArrowRight, Flame, CalendarDays, CalendarPlus, Sparkles,
-  Users, Bot, PartyPopper, Clock3, ChevronDown, ChevronUp, Pencil, Link2,
+  Users, Bot, PartyPopper, Clock3, ChevronDown, ChevronUp, Pencil,
 } from 'lucide-react';
 import { fetcher } from '@/lib/client';
 import { PageHeader, PageBody } from '@/components/tm/PageHeader';
@@ -17,6 +17,8 @@ import { fmtDate, toDateInput } from '@/lib/format';
 import { useSession } from '@/hooks/useSession';
 import { cn } from '@/lib/cn';
 import { OriginalText } from '@/components/tm/OriginalText';
+import { StatusBadge } from '@/components/ui/Badge';
+import { TASK_STATUSES, type TaskStatus } from '@/lib/types';
 
 interface UpdateItem {
   id: number;
@@ -37,7 +39,6 @@ interface UpdateRow {
   full_name: string;
   avatar_url: string | null;
   is_auto_submitted: number | null;
-  from_online_work?: number | null;
 }
 
 interface CalendarDay {
@@ -344,11 +345,6 @@ export default function DailyUpdatesPage() {
                           <Bot className="h-3 w-3" /> Filed automatically
                         </span>
                       )}
-                      {!!u.from_online_work && (
-                        <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold text-sky-600 dark:text-sky-400">
-                          <Link2 className="h-3 w-3" /> From Online Work
-                        </span>
-                      )}
                     </div>
                     <span className="shrink-0 text-xs text-faint">
                       {u.total_hours ? `${u.total_hours}h logged` : `${u.item_count} items`}
@@ -365,11 +361,18 @@ export default function DailyUpdatesPage() {
                   </div>
                   {u.summary && <p className="mt-1.5 text-sm text-muted">{u.summary}</p>}
                   <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                    {/* Each item carries its status, so a Waiting or Blocked item
+                        reads as such rather than as one more title. */}
                     {shown.map((it) => (
                       <span
                         key={it.id}
-                        className="rounded-full bg-line/40 px-2.5 py-1 text-xs text-muted transition-colors hover:bg-brand-soft hover:text-brand"
+                        className="inline-flex items-center gap-1.5 rounded-full bg-line/40 py-0.5 pl-0.5 pr-2.5 text-xs text-muted transition-colors hover:bg-brand-soft hover:text-brand"
                       >
+                        {it.status && TASK_STATUSES.includes(it.status as TaskStatus) ? (
+                          <StatusBadge status={it.status as TaskStatus} />
+                        ) : (
+                          <span className="pl-2" />
+                        )}
                         {it.title}
                       </span>
                     ))}

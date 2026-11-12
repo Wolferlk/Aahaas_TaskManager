@@ -48,15 +48,51 @@ const identitySchema = z.object({
 });
 export type OwIdentity = z.infer<typeof identitySchema>;
 
-const OW_STATUSES = ['planned', 'in_progress', 'done', 'blocked', 'carried_over'] as const;
+const OW_STATUSES = ['planned', 'in_progress', 'done', 'blocked', 'carried_over', 'waiting', 'review'] as const;
+type OwStatus = (typeof OW_STATUSES)[number];
 const OW_PRIORITIES = ['low', 'normal', 'high', 'critical'] as const;
+
+/** Other spellings Online Work (or an older/newer build of it) may send. */
+const OW_STATUS_ALIASES: Record<string, OwStatus> = {
+  todo: 'planned',
+  to_do: 'planned',
+  inprogress: 'in_progress',
+  started: 'in_progress',
+  completed: 'done',
+  complete: 'done',
+  finished: 'done',
+  stuck: 'blocked',
+  carried: 'carried_over',
+  carry_over: 'carried_over',
+  carriedover: 'carried_over',
+  awaiting: 'waiting',
+  pending: 'waiting',
+  on_hold: 'waiting',
+  hold: 'waiting',
+  in_review: 'review',
+  under_review: 'review',
+  reviewing: 'review',
+};
+
+/**
+ * Reads an item's status the way Online Work wrote it. A status this side does
+ * not know used to fail the schema and drop the whole day's filing; it now
+ * lands on the closest known status instead, and an unrecognised word is
+ * treated as work in progress rather than refused.
+ */
+function normalizeOwStatus(value: unknown): OwStatus {
+  if (value === undefined || value === null || value === '') return 'planned';
+  const key = String(value).trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if ((OW_STATUSES as readonly string[]).includes(key)) return key as OwStatus;
+  return OW_STATUS_ALIASES[key] ?? OW_STATUS_ALIASES[key.replace(/_/g, '')] ?? 'in_progress';
+}
 
 const owTaskSchema = z.object({
   id: z.string().max(64),
   title: z.string().trim().max(140),
   description: z.string().max(2000).default(''),
   category: z.string().max(40).default('other'),
-  status: z.enum(OW_STATUSES).default('planned'),
+  status: z.preprocess(normalizeOwStatus, z.enum(OW_STATUSES)),
   priority: z.enum(OW_PRIORITIES).default('normal'),
   minutes: z.number().int().min(0).max(24 * 60).default(0),
   ref: z.string().trim().max(60).default(''),
@@ -438,12 +474,15 @@ export async function unlink(user: SessionUser): Promise<boolean> {
  * Turning a filing into a Daily Update
  * ------------------------------------------------------------------ */
 
-const STATUS_MAP: Record<(typeof OW_STATUSES)[number], string> = {
+const STATUS_MAP: Record<OwStatus, string> = {
   planned: 'TODO',
   in_progress: 'IN_PROGRESS',
   done: 'COMPLETED',
   blocked: 'BLOCKED',
+  // Still open, moved to tomorrow — the item's outcome says so.
   carried_over: 'IN_PROGRESS',
+  waiting: 'WAITING',
+  review: 'REVIEW',
 };
 
 const PRIORITY_MAP: Record<(typeof OW_PRIORITIES)[number], string> = {
@@ -468,8 +507,9 @@ const WORK_TYPE: Record<string, string | null> = {
   other: null,
 };
 
-const OW_STATUS_WORD: Record<(typeof OW_STATUSES)[number], string> = {
+const OW_STATUS_WORD: Record<OwStatus, string> = {
   planned: 'Planned', in_progress: 'In progress', done: 'Done', blocked: 'Blocked', carried_over: 'Carried over',
+  waiting: 'Waiting', review: 'Review',
 };
 
 const DAY_WORD: Record<string, string> = { working: 'Working', half_day: 'Half day', leave: 'Leave', holiday: 'Holiday' };

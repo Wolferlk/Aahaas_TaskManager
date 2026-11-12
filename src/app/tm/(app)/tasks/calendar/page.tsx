@@ -20,16 +20,24 @@ interface TaskRow {
 
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function addMonths(d: Date, n: number) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
+function localDay(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 function CalendarInner() {
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
   const [openTask, setOpenTask] = useState<number | null>(null);
 
-  const from = cursor.toISOString().slice(0, 10);
-  const to = addMonths(cursor, 1).toISOString().slice(0, 10);
+  // Local dates: toISOString() shifts to UTC, which east of Greenwich moves the
+  // range back a day and drops deadlines on the last day of the month.
+  const from = localDay(cursor);
+  const to = `${localDay(addMonths(cursor, 1))} 00:00:00`;
 
+  // No `view`: every task this person may see (their own, ones they created,
+  // and their team's for a Leader/Manager). `view=team` left an Employee's own
+  // deadlines off the calendar.
   const { data, isLoading, mutate } = useSWR<{ tasks: TaskRow[] }>(
-    `/api/tm/tasks?view=team&deadline_from=${from}&deadline_to=${to}&limit=200`,
+    `/api/tm/tasks?deadline_from=${from}&deadline_to=${encodeURIComponent(to)}&sort=deadline&dir=asc&limit=100`,
     fetcher,
   );
 

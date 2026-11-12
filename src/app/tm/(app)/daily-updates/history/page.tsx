@@ -109,8 +109,12 @@ function DailyUpdateHistoryInner() {
     const requested = Number(searchParams.get('user'));
     return Number.isFinite(requested) && requested > 0 ? String(requested) : '';
   });
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  // A link to one day (e.g. a Daily Update row in Team Tasks) opens on that day.
+  const [from, setFrom] = useState(() => {
+    const day = searchParams.get('date') ?? '';
+    return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : '';
+  });
+  const [to, setTo] = useState(from);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
   const params = new URLSearchParams({
